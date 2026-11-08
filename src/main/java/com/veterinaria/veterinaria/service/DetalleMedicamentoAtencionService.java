@@ -1,4 +1,3 @@
-
 package com.veterinaria.veterinaria.service;
 
 // ==========================================================
@@ -7,7 +6,10 @@ package com.veterinaria.veterinaria.service;
 
 import java.math.BigDecimal;
 import java.math.RoundingMode;
+import java.util.ArrayList;
+import java.util.HashSet;
 import java.util.List;
+import java.util.Set;
 
 import org.springframework.http.HttpStatus;
 import org.springframework.security.access.prepost.PreAuthorize;
@@ -15,9 +17,7 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.server.ResponseStatusException;
 
-// Permiten bloquear registros durante una transaccion.
-// Evitan que dos atenciones descuenten simultaneamente
-// el mismo stock sin comprobar las existencias.
+// Bloqueos transaccionales.
 import jakarta.persistence.EntityManager;
 import jakarta.persistence.LockModeType;
 
@@ -53,53 +53,55 @@ import com.veterinaria.veterinaria.exception.ResourceNotFoundException;
 
 // ==========================================================
 // SERVICIO DE DETALLES DE MEDICAMENTOS
+// VETERINARIA ARÉVALO
 // ==========================================================
 //
-// OBJETIVO:
+// FUNCIONALIDADES:
 //
-// Registrar medicamentos utilizados o recetados
-// durante una atencion medica veterinaria.
+// 1. Registrar un medicamento individual.
+// 2. Registrar varios medicamentos en una operación.
+// 3. Consultar medicamentos de una atención.
+// 4. Consultar medicamentos por tipo.
+// 5. Consultar medicamentos por mascota.
+// 6. Consultar historial de un medicamento.
+// 7. Buscar un detalle por ID.
 //
-// ==========================================================
-// PERMISOS
-// ==========================================================
+// PERMISOS:
 //
 // ADMIN:
-// - Administra el catalogo y el inventario.
-// - Puede consultar los registros de medicamentos.
+// - Administra catálogo e inventario.
+// - Consulta registros de medicamentos.
 //
 // VETERINARIO:
-// - Registra medicamentos en SUS atenciones.
-// - Solo selecciona medicamentos existentes y activos.
-// - Indica tipo, cantidad y observaciones.
-// - NO crea medicamentos.
-// - NO decide el precio.
-// - NO modifica directamente el stock.
+// - Registra medicamentos en sus atenciones.
+// - Selecciona medicamentos activos.
+// - No modifica precios ni inventario directamente.
 //
 // USER:
-// - No registra medicamentos.
-// - Puede consultar los detalles autorizados
+// - Consulta los registros autorizados
 //   de las atenciones de sus mascotas.
 //
-// ==========================================================
-// FUNCIONAMIENTO
-// ==========================================================
+// TIPOS:
 //
 // UTILIZADO:
-// - Descuenta existencias.
-// - Copia el precio del catalogo.
-// - Calcula el subtotal.
+// - Descuenta stock.
+// - Genera importe.
 //
 // RECETADO:
-// - No descuenta existencias.
-// - Guarda la prescripcion.
-// - Su subtotal es cero.
+// - No descuenta stock.
+// - No genera cobro.
 //
 // RECETADO_ENTREGADO:
-// - El medicamento se receta y se entrega al propietario.
-// - Descuenta existencias y calcula su subtotal.
+// - Descuenta stock.
+// - Genera importe.
 //
-// Los tres tipos requieren un medicamento ACTIVO.
+// REGISTRO POR LOTES:
+//
+// - Hasta 30 medicamentos por operación.
+// - Una sola transacción.
+// - Si un medicamento falla, se revierte todo.
+// - No permite duplicados.
+// - Respeta los permisos y validaciones existentes.
 //
 // ==========================================================
 
@@ -112,7 +114,6 @@ public class DetalleMedicamentoAtencionService {
 
     private final DetalleMedicamentoAtencionRepository detalleRepository;
 
-    // Permite comprobar si la atencion ya tiene factura.
     private final FacturaRepository facturaRepository;
 
     private final AtencionMedicaRepository atencionRepository;
@@ -144,49 +145,19 @@ public class DetalleMedicamentoAtencionService {
     ) {
 
         this.detalleRepository = detalleRepository;
-
         this.facturaRepository = facturaRepository;
-
         this.atencionRepository = atencionRepository;
-
         this.medicamentoRepository = medicamentoRepository;
-
         this.usuarioRepository = usuarioRepository;
-
         this.veterinarioService = veterinarioService;
-
         this.atencionMedicaService = atencionMedicaService;
-
         this.entityManager = entityManager;
 
     }
 
 
     // ======================================================
-    // 1. REGISTRAR MEDICAMENTO EN UNA ATENCION
-    // ======================================================
-    //
-    // SOLO VETERINARIO.
-    //
-    // Recibe:
-    // - ID de la atencion.
-    // - ID del medicamento existente.
-    // - Tipo: UTILIZADO, RECETADO o RECETADO_ENTREGADO.
-    // - Cantidad.
-    // - Indicaciones opcionales.
-    // - Correo obtenido del JWT.
-    //
-    // IMPORTANTE:
-    //
-    // El veterinario NO envia precios ni stock.
-    //
-    // Como AtencionMedicaService completa la cita
-    // al guardar la atencion, los medicamentos
-    // se registran en una atencion ya COMPLETADA.
-    //
-    // @Transactional garantiza que el descuento
-    // y el detalle se guarden juntos o se reviertan.
-    //
+    // 1. REGISTRAR UN MEDICAMENTO INDIVIDUAL
     // ======================================================
 
     @PreAuthorize("hasRole('VETERINARIO')")
@@ -200,15 +171,18 @@ public class DetalleMedicamentoAtencionService {
             String correoAutenticado
     ) {
 
-        // ==================================================
-        // PASO 1. VALIDAR DATOS RECIBIDOS
-        // ==================================================
+        // PASO 1. VALIDAR DATOS.
 
-        if (atencionId == null || medicamentoId == null) {
+        if (
+                atencionId == null
+                || atencionId <= 0
+                || medicamentoId == null
+                || medicamentoId <= 0
+        ) {
 
             throw new ResponseStatusException(
                     HttpStatus.BAD_REQUEST,
-                    "Debe seleccionar la atencion y el medicamento"
+                    "Debe seleccionar una atencion y un medicamento validos"
             );
 
         }
@@ -217,7 +191,7 @@ public class DetalleMedicamentoAtencionService {
 
             throw new ResponseStatusException(
                     HttpStatus.BAD_REQUEST,
-                    "El tipo debe ser UTILIZADO, RECETADO o RECETADO_ENTREGADO"
+                    "Debe seleccionar un tipo de registro valido"
             );
 
         }
@@ -229,16 +203,7 @@ public class DetalleMedicamentoAtencionService {
                 validarIndicaciones(indicaciones);
 
 
-        // ==================================================
-        // PASO 2. IDENTIFICAR AL VETERINARIO
-        // ==================================================
-        //
-        // El correo debe proceder del JWT.
-        //
-        // No confiamos en un usuarioId ni veterinarioId
-        // enviado libremente desde Swagger o Angular.
-        //
-        // ==================================================
+        // PASO 2. IDENTIFICAR AL VETERINARIO.
 
         Usuario usuario = obtenerUsuarioAutenticado(
                 correoAutenticado
@@ -248,33 +213,22 @@ public class DetalleMedicamentoAtencionService {
 
             throw new ResponseStatusException(
                     HttpStatus.FORBIDDEN,
-                    "Solo un veterinario puede registrar medicamentos en una atencion"
+                    "Solo un veterinario puede registrar medicamentos"
             );
 
         }
 
         Veterinario veterinario = veterinarioService
                 .buscarPorUsuarioId(usuario.getId())
-
                 .orElseThrow(() ->
-                    new ResponseStatusException(
-                            HttpStatus.FORBIDDEN,
-                            "La cuenta no tiene una ficha veterinaria vinculada"
-                    )
+                        new ResponseStatusException(
+                                HttpStatus.FORBIDDEN,
+                                "La cuenta no tiene una ficha veterinaria vinculada"
+                        )
                 );
 
 
-        // ==================================================
-        // PASO 3. BUSCAR Y BLOQUEAR LA ATENCION MEDICA
-        // ==================================================
-        //
-        // El bloqueo evita que dos peticiones simultaneas
-        // registren el mismo medicamento y tipo
-        // en la misma atencion.
-        //
-        // El bloqueo se libera al finalizar la transaccion.
-        //
-        // ==================================================
+        // PASO 3. BLOQUEAR ATENCION.
 
         AtencionMedica atencion = entityManager.find(
                 AtencionMedica.class,
@@ -291,18 +245,14 @@ public class DetalleMedicamentoAtencionService {
         }
 
 
-        // ==================================================
-        // PASO 4. VALIDAR VETERINARIO ASIGNADO
-        // ==================================================
+        // PASO 4. VALIDAR VETERINARIO ASIGNADO.
 
         Cita cita = atencion.getCita();
 
         if (
                 cita == null
-                ||
-                cita.getVeterinario() == null
-                ||
-                !veterinario.getId().equals(
+                || cita.getVeterinario() == null
+                || !veterinario.getId().equals(
                         cita.getVeterinario().getId()
                 )
         ) {
@@ -315,75 +265,31 @@ public class DetalleMedicamentoAtencionService {
         }
 
 
-        // ==================================================
-        // PASO 5. VALIDAR ESTADO DE LA CITA
-        // ==================================================
-        //
-        // Nuestro flujo actual es:
-        //
-        // CONFIRMADA -> REGISTRAR ATENCION -> COMPLETADA
-        //
-        // Por eso permitimos agregar medicamentos
-        // despues de registrar la atencion.
-        //
-        // No se admiten registros en citas canceladas.
-        //
-        // ==================================================
+        // PASO 5. VALIDAR ESTADO DE CITA.
 
         if (!"COMPLETADA".equals(cita.getEstado())) {
 
             throw new ResponseStatusException(
                     HttpStatus.CONFLICT,
-                    "La cita debe estar COMPLETADA para registrar los medicamentos de su atencion"
+                    "La cita debe estar COMPLETADA para registrar medicamentos"
             );
 
         }
 
-        // ==================================================
-        // PASO 59. BLOQUEAR CAMBIOS SI EXISTE UNA FACTURA
-        // ==================================================
-        //
-        // IMPORTANTE:
-        // El servicio ya tiene un bloqueo PESSIMISTIC_WRITE
-        // sobre la atencion medica en esta transaccion.
-        // FacturaService.emitir() utiliza el mismo bloqueo.
-        //
-        // Asi se evita que se emita la factura a la vez
-        // que se agrega otro medicamento: una operacion
-        // termina primero y la otra verifica la factura.
-        //
-        // Una factura guardada inmoviliza los cargos. Esto
-        // aplica tambien si en el futuro existe el estado
-        // PENDIENTE y evita diferencias con los importes.
-        //
-        // Se comprueba ANTES del descuento de stock.
-        // ==================================================
+
+        // PASO 6. IMPEDIR MODIFICACIONES DESPUES DE FACTURAR.
 
         if (facturaRepository.existsByAtencionMedica_Id(atencionId)) {
 
             throw new ResponseStatusException(
                     HttpStatus.CONFLICT,
-                    "Esta atencion ya tiene una factura registrada. "
-                    + "No puedes agregar medicamentos a una atencion facturada"
+                    "Esta atencion ya tiene una factura. No puedes agregar medicamentos"
             );
 
         }
 
 
-        // ==================================================
-        // PASO 6. EVITAR MEDICAMENTOS DUPLICADOS
-        // ==================================================
-        //
-        // En una misma atencion evitamos repetir
-        // el mismo medicamento con el mismo tipo.
-        //
-        // Ejemplo:
-        // Medicamento 1 + UTILIZADO = un solo detalle.
-        //
-        // El mismo medicamento puede tener diferentes tipos
-        // cuando correspondan a usos o entregas distintos.
-        //
-        // ==================================================
+        // PASO 7. EVITAR DUPLICADOS.
 
         boolean existeDetalle = detalleRepository
                 .existsByAtencionMedica_IdAndMedicamento_IdAndTipoRegistro(
@@ -396,23 +302,13 @@ public class DetalleMedicamentoAtencionService {
 
             throw new ResponseStatusException(
                     HttpStatus.CONFLICT,
-                    "Este medicamento ya fue registrado con el mismo tipo en esta atencion"
+                    "Este medicamento ya fue registrado con el mismo tipo"
             );
 
         }
 
 
-        // ==================================================
-        // PASO 7. BUSCAR Y BLOQUEAR EL MEDICAMENTO
-        // ==================================================
-        //
-        // PESSIMISTIC_WRITE bloquea el registro
-        // mientras calculamos y descontamos existencias.
-        //
-        // Esto protege frente a consumos simultaneos
-        // realizados a traves de este servicio.
-        //
-        // ==================================================
+        // PASO 8. BUSCAR Y BLOQUEAR MEDICAMENTO.
 
         Medicamento medicamento = entityManager.find(
                 Medicamento.class,
@@ -429,14 +325,7 @@ public class DetalleMedicamentoAtencionService {
         }
 
 
-        // ==================================================
-        // PASO 8. VALIDAR QUE ESTE ACTIVO
-        // ==================================================
-        //
-        // Los medicamentos inactivos pueden consultarse,
-        // pero no utilizarse en nuevos registros.
-        //
-        // ==================================================
+        // PASO 9. VALIDAR ESTADO.
 
         if (!medicamento.isActivo()) {
 
@@ -448,24 +337,14 @@ public class DetalleMedicamentoAtencionService {
         }
 
 
-        // ==================================================
-        // PASO 9. OBTENER PRECIO DEL CATALOGO
-        // ==================================================
-        //
-        // El precio se obtiene directamente de PostgreSQL.
-        //
-        // El veterinario no puede enviar un precio
-        // personalizado ni modificar el existente.
-        //
-        // ==================================================
+        // PASO 10. OBTENER PRECIO REAL.
 
         BigDecimal precioUnitario =
                 medicamento.getPrecioUnitario();
 
         if (
                 precioUnitario == null
-                ||
-                precioUnitario.compareTo(BigDecimal.ZERO) < 0
+                || precioUnitario.compareTo(BigDecimal.ZERO) < 0
         ) {
 
             throw new ResponseStatusException(
@@ -476,22 +355,19 @@ public class DetalleMedicamentoAtencionService {
         }
 
 
-        // ==================================================
-        // PASO 10. CALCULAR SUBTOTAL
-        // ==================================================
+        // PASO 11. CALCULAR SUBTOTAL.
 
         BigDecimal subtotal = BigDecimal.ZERO.setScale(2);
 
-        if (tipoRegistro == TipoRegistro.UTILIZADO
-                || tipoRegistro == TipoRegistro.RECETADO_ENTREGADO) {
+        if (
+                tipoRegistro == TipoRegistro.UTILIZADO
+                || tipoRegistro == TipoRegistro.RECETADO_ENTREGADO
+        ) {
 
-            // Multiplicar cantidad por precio unitario.
             subtotal = precioUnitario
                     .multiply(cantidadValidada)
                     .setScale(2, RoundingMode.HALF_UP);
 
-            // Comprobar que el importe quepa
-            // en la columna NUMERIC(12,2).
             if (subtotal.precision() - subtotal.scale() > 10) {
 
                 throw new ResponseStatusException(
@@ -504,20 +380,12 @@ public class DetalleMedicamentoAtencionService {
         }
 
 
-        // ==================================================
-        // PASO 11. DESCONTAR STOCK SI FUE UTILIZADO O ENTREGADO
-        // ==================================================
-        //
-        // UTILIZADO y RECETADO_ENTREGADO:
-        // - Validar existencias y descontar la cantidad.
-        //
-        // RECETADO:
-        // - No descontar existencias ni cobrar.
-        //
-        // ==================================================
+        // PASO 12. DESCONTAR STOCK.
 
-        if (tipoRegistro == TipoRegistro.UTILIZADO
-                || tipoRegistro == TipoRegistro.RECETADO_ENTREGADO) {
+        if (
+                tipoRegistro == TipoRegistro.UTILIZADO
+                || tipoRegistro == TipoRegistro.RECETADO_ENTREGADO
+        ) {
 
             BigDecimal stockActual =
                     medicamento.getStockDisponible();
@@ -536,9 +404,9 @@ public class DetalleMedicamentoAtencionService {
                 throw new ResponseStatusException(
                         HttpStatus.CONFLICT,
                         "Stock insuficiente. Disponible: "
-                        + stockActual
-                        + " "
-                        + medicamento.getUnidadMedida()
+                                + stockActual
+                                + " "
+                                + medicamento.getUnidadMedida()
                 );
 
             }
@@ -553,9 +421,7 @@ public class DetalleMedicamentoAtencionService {
         }
 
 
-        // ==================================================
-        // PASO 12. CREAR EL DETALLE
-        // ==================================================
+        // PASO 13. CREAR DETALLE.
 
         DetalleMedicamentoAtencion detalle =
                 new DetalleMedicamentoAtencion();
@@ -571,16 +437,7 @@ public class DetalleMedicamentoAtencionService {
         detalle.setCantidad(cantidadValidada);
 
 
-        // ==================================================
-        // PASO 13. GUARDAR DATOS HISTORICOS
-        // ==================================================
-        //
-        // Copiamos el nombre, unidad y precio actuales.
-        //
-        // Si ADMIN modifica el catalogo en el futuro,
-        // esta atencion conserva los valores originales.
-        //
-        // ==================================================
+        // PASO 14. CONSERVAR DATOS HISTORICOS.
 
         detalle.setNombreMedicamento(
                 medicamento.getNombre()
@@ -596,21 +453,12 @@ public class DetalleMedicamentoAtencionService {
 
         detalle.setSubtotal(subtotal);
 
-        detalle.setIndicaciones(indicacionesValidadas);
+        detalle.setIndicaciones(
+                indicacionesValidadas
+        );
 
 
-        // ==================================================
-        // PASO 14. GUARDAR EN POSTGRESQL
-        // ==================================================
-        //
-        // La transaccion incluye:
-        //
-        // - Descuento de stock, si corresponde.
-        // - Registro del medicamento.
-        //
-        // Si algo falla, no se confirma ninguno.
-        //
-        // ==================================================
+        // PASO 15. GUARDAR.
 
         return detalleRepository.save(detalle);
 
@@ -618,18 +466,167 @@ public class DetalleMedicamentoAtencionService {
 
 
     // ======================================================
-    // 2. CONSULTAR MEDICAMENTOS DE UNA ATENCION
+    // 2. REGISTRAR VARIOS MEDICAMENTOS
     // ======================================================
     //
-    // ADMIN:
-    // Puede consultar cualquier atencion.
+    // Endpoint:
     //
-    // USER:
-    // Solo atenciones de sus mascotas.
+    // POST /api/detalles-medicamentos-atencion/lote
     //
-    // VETERINARIO:
-    // Solo atenciones de sus citas asignadas.
+    // IMPORTANTE:
     //
+    // Se reutiliza registrar() para conservar todas
+    // las validaciones, permisos y reglas del inventario.
+    //
+    // La transaccion exterior incluye todos los registros.
+    //
+    // Si el segundo o tercer medicamento falla,
+    // se revierte el lote completo.
+    //
+    // ======================================================
+
+    @PreAuthorize("hasRole('VETERINARIO')")
+    @Transactional(rollbackFor = Exception.class)
+    public List<DetalleMedicamentoAtencion> registrarVarios(
+            Long atencionId,
+            List<RegistroMedicamentoLoteItem> medicamentos,
+            String correoAutenticado
+    ) {
+
+        // VALIDAR ATENCION.
+
+        if (
+                atencionId == null
+                || atencionId <= 0
+        ) {
+
+            throw new ResponseStatusException(
+                    HttpStatus.BAD_REQUEST,
+                    "Debe seleccionar una atencion valida"
+            );
+
+        }
+
+
+        // VALIDAR LISTA.
+
+        if (
+                medicamentos == null
+                || medicamentos.isEmpty()
+        ) {
+
+            throw new ResponseStatusException(
+                    HttpStatus.BAD_REQUEST,
+                    "Debe agregar al menos un medicamento"
+            );
+
+        }
+
+        if (medicamentos.size() > 30) {
+
+            throw new ResponseStatusException(
+                    HttpStatus.BAD_REQUEST,
+                    "Puedes registrar como maximo 30 medicamentos por operacion"
+            );
+
+        }
+
+
+        // VALIDAR DUPLICADOS ANTES DE REGISTRAR.
+
+        Set<String> combinaciones = new HashSet<>();
+
+        for (RegistroMedicamentoLoteItem item : medicamentos) {
+
+            if (item == null) {
+
+                throw new ResponseStatusException(
+                        HttpStatus.BAD_REQUEST,
+                        "La lista contiene un medicamento vacio"
+                );
+
+            }
+
+            if (
+                    item.medicamentoId() == null
+                    || item.medicamentoId() <= 0
+            ) {
+
+                throw new ResponseStatusException(
+                        HttpStatus.BAD_REQUEST,
+                        "Todos los medicamentos deben tener un ID valido"
+                );
+
+            }
+
+            if (item.tipoRegistro() == null) {
+
+                throw new ResponseStatusException(
+                        HttpStatus.BAD_REQUEST,
+                        "Todos los medicamentos deben tener un tipo de registro"
+                );
+
+            }
+
+            String clave =
+                    item.medicamentoId()
+                    + ":"
+                    + item.tipoRegistro().name();
+
+            if (!combinaciones.add(clave)) {
+
+                throw new ResponseStatusException(
+                        HttpStatus.CONFLICT,
+                        "No puedes repetir el mismo medicamento con el mismo tipo"
+                );
+
+            }
+
+        }
+
+
+        // REGISTRAR TODO EL LOTE.
+
+        List<DetalleMedicamentoAtencion> guardados =
+                new ArrayList<>();
+
+        for (RegistroMedicamentoLoteItem item : medicamentos) {
+
+            DetalleMedicamentoAtencion detalle = registrar(
+                    atencionId,
+                    item.medicamentoId(),
+                    item.tipoRegistro(),
+                    item.cantidad(),
+                    item.indicaciones(),
+                    correoAutenticado
+            );
+
+            guardados.add(detalle);
+
+        }
+
+
+        // DEVOLVER TODOS LOS REGISTROS.
+
+        return List.copyOf(guardados);
+
+    }
+
+
+    // ======================================================
+    // DTO INTERNO PARA REGISTRO POR LOTES
+    // ======================================================
+
+    public record RegistroMedicamentoLoteItem(
+            Long medicamentoId,
+            TipoRegistro tipoRegistro,
+            BigDecimal cantidad,
+            String indicaciones
+    ) {}
+
+
+    // ======================================================
+    // 3. CONSULTAR MEDICAMENTOS DE UNA ATENCION
     // ======================================================
 
     @PreAuthorize("hasAnyRole('ADMIN','USER','VETERINARIO')")
@@ -641,8 +638,6 @@ public class DetalleMedicamentoAtencionService {
 
         AtencionMedica atencion = obtenerAtencion(atencionId);
 
-        // Reutilizamos las validaciones de acceso
-        // que ya tiene AtencionMedicaService.
         atencionMedicaService.buscarPorCita(
                 atencion.getCita().getId(),
                 correoAutenticado
@@ -657,14 +652,7 @@ public class DetalleMedicamentoAtencionService {
 
 
     // ======================================================
-    // 3. CONSULTAR MEDICAMENTOS POR TIPO
-    // ======================================================
-    //
-    // Permite filtrar UTILIZADO, RECETADO y RECETADO_ENTREGADO.
-    //
-    // Se validan los mismos permisos de lectura
-    // de la atencion medica.
-    //
+    // 4. CONSULTAR MEDICAMENTOS POR TIPO
     // ======================================================
 
     @PreAuthorize("hasAnyRole('ADMIN','USER','VETERINARIO')")
@@ -701,18 +689,7 @@ public class DetalleMedicamentoAtencionService {
 
 
     // ======================================================
-    // 4. CONSULTAR MEDICAMENTOS DE UNA MASCOTA
-    // ======================================================
-    //
-    // ADMIN:
-    // Puede consultar todas las mascotas.
-    //
-    // USER:
-    // Solo las mascotas de su propiedad.
-    //
-    // VETERINARIO:
-    // Solo mascotas con citas asignadas a el.
-    //
+    // 5. CONSULTAR MEDICAMENTOS DE UNA MASCOTA
     // ======================================================
 
     @PreAuthorize("hasAnyRole('ADMIN','USER','VETERINARIO')")
@@ -722,8 +699,6 @@ public class DetalleMedicamentoAtencionService {
             String correoAutenticado
     ) {
 
-        // Este metodo comprueba los permisos
-        // sobre el historial de la mascota.
         atencionMedicaService.historialDeMascota(
                 mascotaId,
                 correoAutenticado
@@ -738,16 +713,7 @@ public class DetalleMedicamentoAtencionService {
 
 
     // ======================================================
-    // 5. HISTORIAL DE UN MEDICAMENTO
-    // ======================================================
-    //
-    // SOLO ADMIN.
-    //
-    // Muestra las atenciones donde aparece un medicamento.
-    //
-    // No permitimos que un veterinario consulte
-    // los consumos clinicos de otros profesionales.
-    //
+    // 6. HISTORIAL DE UN MEDICAMENTO
     // ======================================================
 
     @PreAuthorize("hasRole('ADMIN')")
@@ -773,12 +739,7 @@ public class DetalleMedicamentoAtencionService {
 
 
     // ======================================================
-    // 6. BUSCAR DETALLE POR ID
-    // ======================================================
-    //
-    // Comprueba los permisos de acceso a la atencion
-    // antes de devolver el detalle solicitado.
-    //
+    // 7. BUSCAR DETALLE POR ID
     // ======================================================
 
     @PreAuthorize("hasAnyRole('ADMIN','USER','VETERINARIO')")
@@ -792,13 +753,12 @@ public class DetalleMedicamentoAtencionService {
                 detalleRepository.findById(id)
 
                 .orElseThrow(() ->
-                    new ResourceNotFoundException(
-                            "Detalle de medicamento no encontrado con id: "
-                            + id
-                    )
+                        new ResourceNotFoundException(
+                                "Detalle de medicamento no encontrado con id: "
+                                        + id
+                        )
                 );
 
-        // Verificar permisos de lectura.
         atencionMedicaService.buscarPorCita(
                 detalle.getAtencionMedica().getCita().getId(),
                 correoAutenticado
@@ -810,7 +770,7 @@ public class DetalleMedicamentoAtencionService {
 
 
     // ======================================================
-    // METODO AUXILIAR: OBTENER ATENCION
+    // MÉTODO AUXILIAR: OBTENER ATENCIÓN
     // ======================================================
 
     private AtencionMedica obtenerAtencion(Long id) {
@@ -818,21 +778,16 @@ public class DetalleMedicamentoAtencionService {
         return atencionRepository.findById(id)
 
                 .orElseThrow(() ->
-                    new ResourceNotFoundException(
-                            "Atencion medica no encontrada con id: " + id
-                    )
+                        new ResourceNotFoundException(
+                                "Atencion medica no encontrada con id: " + id
+                        )
                 );
 
     }
 
 
     // ======================================================
-    // METODO AUXILIAR: OBTENER USUARIO AUTENTICADO
-    // ======================================================
-    //
-    // No aceptamos un correo del JSON.
-    // Siempre debe proceder del JWT.
-    //
+    // MÉTODO AUXILIAR: OBTENER USUARIO AUTENTICADO
     // ======================================================
 
     private Usuario obtenerUsuarioAutenticado(
@@ -841,8 +796,7 @@ public class DetalleMedicamentoAtencionService {
 
         if (
                 correoAutenticado == null
-                ||
-                correoAutenticado.isBlank()
+                || correoAutenticado.isBlank()
         ) {
 
             throw new ResponseStatusException(
@@ -855,23 +809,16 @@ public class DetalleMedicamentoAtencionService {
         return usuarioRepository.findByCorreo(correoAutenticado)
 
                 .orElseThrow(() ->
-                    new ResourceNotFoundException(
-                            "Usuario autenticado no encontrado"
-                    )
+                        new ResourceNotFoundException(
+                                "Usuario autenticado no encontrado"
+                        )
                 );
 
     }
 
 
     // ======================================================
-    // METODO AUXILIAR: VALIDAR CANTIDAD
-    // ======================================================
-    //
-    // - Obligatoria.
-    // - Mayor que cero.
-    // - Maximo dos decimales.
-    // - Maximo diez digitos enteros.
-    //
+    // MÉTODO AUXILIAR: VALIDAR CANTIDAD
     // ======================================================
 
     private BigDecimal validarCantidad(BigDecimal cantidad) {
@@ -927,21 +874,18 @@ public class DetalleMedicamentoAtencionService {
 
 
     // ======================================================
-    // METODO AUXILIAR: VALIDAR INDICACIONES
-    // ======================================================
-    //
-    // Campo opcional con maximo 1000 caracteres.
-    //
+    // MÉTODO AUXILIAR: VALIDAR INDICACIONES
     // ======================================================
 
     private String validarIndicaciones(String indicaciones) {
 
         if (
                 indicaciones == null
-                ||
-                indicaciones.isBlank()
+                || indicaciones.isBlank()
         ) {
+
             return null;
+
         }
 
         String texto = indicaciones.trim();

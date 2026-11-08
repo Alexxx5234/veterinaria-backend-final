@@ -1,120 +1,66 @@
-
 package com.veterinaria.veterinaria.controller;
 
 // ==========================================================
-// IMPORTACIONES GENERALES
+// IMPORTACIONES
 // ==========================================================
 
-// Para manejar cantidades, precios y subtotales.
 import java.math.BigDecimal;
-
-// Para manejar la fecha de registro.
 import java.time.LocalDateTime;
-
-// Para devolver listas de medicamentos.
+import java.util.ArrayList;
 import java.util.List;
 
-// Para manejar respuestas HTTP.
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
-
-// Para proteger los endpoints segun el rol.
 import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.security.core.Authentication;
-
-// Para crear los endpoints REST.
 import org.springframework.web.bind.annotation.*;
 import org.springframework.web.server.ResponseStatusException;
 
-// Para validar los datos enviados.
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.DecimalMin;
 import jakarta.validation.constraints.Digits;
+import jakarta.validation.constraints.NotEmpty;
 import jakarta.validation.constraints.NotNull;
 import jakarta.validation.constraints.Size;
 
-// Documentacion de Swagger.
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.media.Schema;
 import io.swagger.v3.oas.annotations.responses.ApiResponse;
 
-// ==========================================================
-// MODELOS
-// ==========================================================
-
 import com.veterinaria.veterinaria.model.DetalleMedicamentoAtencion;
 import com.veterinaria.veterinaria.model.DetalleMedicamentoAtencion.TipoRegistro;
 
-// ==========================================================
-// SERVICIOS
-// ==========================================================
-
 import com.veterinaria.veterinaria.service.DetalleMedicamentoAtencionService;
+import com.veterinaria.veterinaria.service.DetalleMedicamentoAtencionService.RegistroMedicamentoLoteItem;
 
 
 // ==========================================================
-// CONTROLADOR DE MEDICAMENTOS EN ATENCIONES MEDICAS
+// CONTROLADOR DE MEDICAMENTOS DE ATENCIONES
+// VETERINARIA ARÉVALO
 // ==========================================================
 //
-// OBJETIVO:
+// FUNCIONES:
 //
-// Permitir registrar los medicamentos utilizados,
-// recetados o recetados y entregados durante las atenciones. 
+// 1. Registrar un medicamento.
+// 2. Registrar varios medicamentos en una operación.
+// 3. Consultar medicamentos por atención.
+// 4. Consultar medicamentos por tipo.
+// 5. Consultar medicamentos por mascota.
+// 6. Consultar historial de un medicamento.
+// 7. Buscar un detalle por ID.
 //
-// ==========================================================
-// PERMISOS
-// ==========================================================
+// PERMISOS:
 //
 // ADMIN:
-//
-// - Administra el catalogo de medicamentos.
-// - Administra precios y existencias.
-// - Consulta registros de medicamentos utilizados.
+// - Consulta registros.
+// - Administra catálogo e inventario desde su módulo.
 //
 // VETERINARIO:
-//
-// - Selecciona medicamentos existentes.
 // - Registra medicamentos en sus propias atenciones.
-// - Indica la cantidad y el tipo de registro.
-// - Consulta registros autorizados.
-//
-// NO PUEDE:
-//
-// - Crear medicamentos nuevos.
-// - Modificar precios.
-// - Ajustar inventario directamente.
-// - Registrar medicamentos en atenciones ajenas.
+// - Consulta los registros autorizados.
 //
 // USER:
-//
-// - Puede consultar los registros correspondientes
-//   a sus propias mascotas.
-//
-// - No puede registrar medicamentos.
-//
-// ==========================================================
-// FUNCIONAMIENTO
-// ==========================================================
-//
-// UTILIZADO:
-//
-// - Descuenta el stock.
-// - Guarda el precio aplicado.
-// - Calcula el subtotal.
-//
-// RECETADO:
-//
-// - No descuenta stock.
-// - No genera cobro automatico.
-//
-// RECETADO_ENTREGADO:
-//
-// - Descuenta stock.
-// - Guarda el precio aplicado.
-// - Calcula el subtotal.
-//
-// Los permisos y las operaciones de inventario
-// se comprueban dentro del servicio.
+// - Consulta medicamentos de sus propias mascotas.
 //
 // ==========================================================
 
@@ -123,10 +69,11 @@ import com.veterinaria.veterinaria.service.DetalleMedicamentoAtencionService;
 public class DetalleMedicamentoAtencionController {
 
     // ======================================================
-    // 1. DEPENDENCIA DEL SERVICIO
+    // 1. DEPENDENCIA
     // ======================================================
 
     private final DetalleMedicamentoAtencionService detalleService;
+
 
     // ======================================================
     // 2. CONSTRUCTOR
@@ -140,90 +87,50 @@ public class DetalleMedicamentoAtencionController {
 
     }
 
+
     // ======================================================
-    // 3. REGISTRAR MEDICAMENTO EN UNA ATENCION
+    // 3. REGISTRAR UN MEDICAMENTO
     // ======================================================
     //
     // POST /api/detalles-medicamentos-atencion
     //
     // SOLO VETERINARIO.
     //
-    // El veterinario envia:
-    //
-    // - atencionId
-    // - medicamentoId
-    // - tipoRegistro
-    // - cantidad
-    // - indicaciones
-    //
-    // No envia:
-    //
-    // - precio
-    // - subtotal
-    // - stock
-    // - veterinarioId
-    //
-    // El precio se obtiene del catalogo.
-    // El veterinario se identifica por su JWT.
-    //
     // ======================================================
 
     @Operation(
-        summary = "Registrar medicamento en atencion medica",
-        description = "Permite al veterinario registrar un medicamento "
-                + "UTILIZADO, RECETADO o RECETADO_ENTREGADO "
-                + "en una atencion que tenga asignada."
+        summary = "Registrar medicamento en una atención",
+        description = "Registra un medicamento utilizado, recetado "
+                + "o recetado y entregado en una atención médica."
     )
-
     @ApiResponse(
         responseCode = "201",
         description = "Medicamento registrado correctamente"
     )
-
     @ApiResponse(
         responseCode = "400",
-        description = "Datos enviados incorrectos"
+        description = "Datos incorrectos"
     )
-
     @ApiResponse(
         responseCode = "403",
-        description = "El usuario no tiene permisos"
+        description = "Sin permisos"
     )
-
     @ApiResponse(
         responseCode = "404",
-        description = "Atencion o medicamento no encontrado"
+        description = "Atención o medicamento no encontrado"
     )
-
     @ApiResponse(
         responseCode = "409",
-        description = "Medicamento inactivo, duplicado o stock insuficiente"
+        description = "Medicamento duplicado, inactivo o stock insuficiente"
     )
-
     @PostMapping
     @PreAuthorize("hasRole('VETERINARIO')")
-
     public ResponseEntity<DetalleMedicamentoRespuesta> registrar(
             @Valid @RequestBody RegistroMedicamentoRequest datos,
             Authentication authentication
     ) {
 
-        // 1. Identificar al usuario mediante su JWT.
-        String correo = obtenerCorreoAutenticado(
-                authentication
-        );
-
-        // 2. Enviar los datos al servicio.
-        //
-        // El servicio valida:
-        // - Veterinario asignado.
-        // - Atencion existente.
-        // - Medicamento activo.
-        // - Existencias suficientes.
-        // - Registros duplicados.
-        //
-        // Tambien calcula los importes y descuenta
-        // el inventario cuando corresponde.
+        String correo = obtenerCorreoAutenticado(authentication);
 
         DetalleMedicamentoAtencion detalle =
                 detalleService.registrar(
@@ -235,47 +142,114 @@ public class DetalleMedicamentoAtencionController {
                         correo
                 );
 
-        // 3. Devolver solamente los datos necesarios.
         return ResponseEntity
                 .status(HttpStatus.CREATED)
                 .body(DetalleMedicamentoRespuesta.desde(detalle));
 
     }
 
+
     // ======================================================
-    // 4. CONSULTAR MEDICAMENTOS DE UNA ATENCION
+    // 4. REGISTRAR VARIOS MEDICAMENTOS
     // ======================================================
     //
-    // GET /api/detalles-medicamentos-atencion/atencion/{id}
+    // POST /api/detalles-medicamentos-atencion/lote
     //
-    // ADMIN:
-    // Puede consultar cualquier atencion.
+    // SOLO VETERINARIO.
     //
-    // VETERINARIO:
-    // Solo las atenciones autorizadas.
+    // Recibe una atención y una lista de medicamentos.
     //
-    // USER:
-    // Solo las atenciones de sus mascotas.
+    // El servicio registra todos los elementos
+    // en una sola transacción.
+    //
+    // Si uno falla, se revierte toda la operación.
     //
     // ======================================================
 
     @Operation(
-        summary = "Consultar medicamentos de una atencion",
-        description = "Devuelve los medicamentos utilizados "
-                + "y recetados de una atencion medica."
+        summary = "Registrar varios medicamentos",
+        description = "Registra hasta 30 medicamentos "
+                + "en una sola transacción."
     )
+    @ApiResponse(
+        responseCode = "201",
+        description = "Medicamentos registrados correctamente"
+    )
+    @ApiResponse(
+        responseCode = "400",
+        description = "Datos incompletos o incorrectos"
+    )
+    @ApiResponse(
+        responseCode = "403",
+        description = "Sin permisos"
+    )
+    @ApiResponse(
+        responseCode = "409",
+        description = "Duplicados, medicamentos inactivos o stock insuficiente"
+    )
+    @PostMapping("/lote")
+    @PreAuthorize("hasRole('VETERINARIO')")
+    public ResponseEntity<List<DetalleMedicamentoRespuesta>> registrarLote(
+            @Valid @RequestBody RegistroMedicamentosLoteRequest datos,
+            Authentication authentication
+    ) {
 
+        // Obtener correo desde el JWT.
+        String correo = obtenerCorreoAutenticado(authentication);
+
+        // Convertir los DTO recibidos al formato del servicio.
+        List<RegistroMedicamentoLoteItem> items =
+                datos.getMedicamentos()
+                        .stream()
+                        .map(item -> new RegistroMedicamentoLoteItem(
+                                item.getMedicamentoId(),
+                                item.getTipoRegistro(),
+                                item.getCantidad(),
+                                item.getIndicaciones()
+                        ))
+                        .toList();
+
+        // Registrar todo el lote.
+        List<DetalleMedicamentoAtencion> guardados =
+                detalleService.registrarVarios(
+                        datos.getAtencionId(),
+                        items,
+                        correo
+                );
+
+        // Devolver los registros guardados.
+        return ResponseEntity
+                .status(HttpStatus.CREATED)
+                .body(convertirLista(guardados));
+
+    }
+
+
+    // ======================================================
+    // 5. CONSULTAR MEDICAMENTOS DE UNA ATENCIÓN
+    // ======================================================
+    //
+    // GET /api/detalles-medicamentos-atencion/atencion/{id}
+    //
+    // ADMIN, VETERINARIO y USER.
+    //
+    // El servicio comprueba los permisos.
+    //
+    // ======================================================
+
+    @Operation(
+        summary = "Consultar medicamentos de una atención",
+        description = "Obtiene los medicamentos registrados "
+                + "en una atención médica."
+    )
     @GetMapping("/atencion/{atencionId}")
     @PreAuthorize("hasAnyRole('ADMIN','USER','VETERINARIO')")
-
     public ResponseEntity<List<DetalleMedicamentoRespuesta>> listarPorAtencion(
             @PathVariable Long atencionId,
             Authentication authentication
     ) {
 
-        String correo = obtenerCorreoAutenticado(
-                authentication
-        );
+        String correo = obtenerCorreoAutenticado(authentication);
 
         List<DetalleMedicamentoAtencion> detalles =
                 detalleService.listarPorAtencion(
@@ -283,47 +257,39 @@ public class DetalleMedicamentoAtencionController {
                         correo
                 );
 
-        List<DetalleMedicamentoRespuesta> respuesta =
-                convertirLista(detalles);
-
-        return ResponseEntity.ok(respuesta);
+        return ResponseEntity.ok(convertirLista(detalles));
 
     }
 
+
     // ======================================================
-    // 5. CONSULTAR MEDICAMENTOS POR TIPO
+    // 6. CONSULTAR MEDICAMENTOS POR TIPO
     // ======================================================
     //
     // GET /api/detalles-medicamentos-atencion/
     //     atencion/{id}/tipo/{tipoRegistro}
     //
-    // Permite consultar solamente:
-    //
-    // - UTILIZADO
-    // - RECETADO
-    // - RECETADO_ENTREGADO
+    // Tipos:
+    // UTILIZADO
+    // RECETADO
+    // RECETADO_ENTREGADO
     //
     // ======================================================
 
     @Operation(
         summary = "Consultar medicamentos por tipo",
-        description = "Permite consultar los medicamentos "
-                + "UTILIZADOS, RECETADOS o RECETADOS_ENTREGADOS "
-                + "de una atencion."
+        description = "Filtra los medicamentos de una atención "
+                + "según su tipo de registro."
     )
-
     @GetMapping("/atencion/{atencionId}/tipo/{tipoRegistro}")
     @PreAuthorize("hasAnyRole('ADMIN','USER','VETERINARIO')")
-
     public ResponseEntity<List<DetalleMedicamentoRespuesta>> listarPorTipo(
             @PathVariable Long atencionId,
             @PathVariable TipoRegistro tipoRegistro,
             Authentication authentication
     ) {
 
-        String correo = obtenerCorreoAutenticado(
-                authentication
-        );
+        String correo = obtenerCorreoAutenticado(authentication);
 
         List<DetalleMedicamentoAtencion> detalles =
                 detalleService.listarPorAtencionYTipo(
@@ -332,42 +298,32 @@ public class DetalleMedicamentoAtencionController {
                         correo
                 );
 
-        return ResponseEntity.ok(
-                convertirLista(detalles)
-        );
+        return ResponseEntity.ok(convertirLista(detalles));
 
     }
 
+
     // ======================================================
-    // 6. CONSULTAR MEDICAMENTOS DE UNA MASCOTA
+    // 7. CONSULTAR MEDICAMENTOS DE UNA MASCOTA
     // ======================================================
     //
     // GET /api/detalles-medicamentos-atencion/mascota/{id}
-    //
-    // Permite recuperar el historial de medicamentos
-    // registrados en las atenciones de una mascota.
-    //
-    // El servicio verifica los permisos.
     //
     // ======================================================
 
     @Operation(
         summary = "Consultar medicamentos de una mascota",
-        description = "Obtiene los medicamentos registrados "
-                + "en las atenciones de una mascota."
+        description = "Obtiene el historial de medicamentos "
+                + "de las atenciones de una mascota."
     )
-
     @GetMapping("/mascota/{mascotaId}")
     @PreAuthorize("hasAnyRole('ADMIN','USER','VETERINARIO')")
-
     public ResponseEntity<List<DetalleMedicamentoRespuesta>> listarPorMascota(
             @PathVariable Long mascotaId,
             Authentication authentication
     ) {
 
-        String correo = obtenerCorreoAutenticado(
-                authentication
-        );
+        String correo = obtenerCorreoAutenticado(authentication);
 
         List<DetalleMedicamentoAtencion> detalles =
                 detalleService.listarPorMascota(
@@ -375,41 +331,29 @@ public class DetalleMedicamentoAtencionController {
                         correo
                 );
 
-        return ResponseEntity.ok(
-                convertirLista(detalles)
-        );
+        return ResponseEntity.ok(convertirLista(detalles));
 
     }
 
+
     // ======================================================
-    // 7. HISTORIAL DE UN MEDICAMENTO
+    // 8. HISTORIAL DE UN MEDICAMENTO
     // ======================================================
     //
     // GET /api/detalles-medicamentos-atencion/
-    //     medicamento/{medicamentoId}/historial
+    // medicamento/{medicamentoId}/historial
     //
     // SOLO ADMIN.
-    //
-    // Permite consultar las atenciones en las que
-    // se utilizo o receto un medicamento.
-    //
-    // IMPORTANTE:
-    //
-    // El veterinario puede consultar el catalogo
-    // completo de medicamentos, pero no el historial
-    // de atenciones de otros profesionales.
     //
     // ======================================================
 
     @Operation(
-        summary = "Consultar historial de medicamento",
-        description = "Permite al ADMIN consultar las atenciones "
-                + "donde aparece un medicamento determinado."
+        summary = "Consultar historial de un medicamento",
+        description = "Consulta las atenciones donde aparece "
+                + "un medicamento determinado."
     )
-
     @GetMapping("/medicamento/{medicamentoId}/historial")
     @PreAuthorize("hasRole('ADMIN')")
-
     public ResponseEntity<List<DetalleMedicamentoRespuesta>> historialMedicamento(
             @PathVariable Long medicamentoId
     ) {
@@ -419,43 +363,32 @@ public class DetalleMedicamentoAtencionController {
                         medicamentoId
                 );
 
-        return ResponseEntity.ok(
-                convertirLista(detalles)
-        );
+        return ResponseEntity.ok(convertirLista(detalles));
 
     }
 
+
     // ======================================================
-    // 8. CONSULTAR DETALLE POR ID
+    // 9. BUSCAR DETALLE POR ID
     // ======================================================
     //
     // GET /api/detalles-medicamentos-atencion/{id}
     //
-    // ADMIN:
-    // Puede consultar cualquier detalle.
-    //
-    // USER y VETERINARIO:
-    // Solo los detalles a los que tienen acceso.
-    //
     // ======================================================
 
     @Operation(
-        summary = "Consultar detalle de medicamento por ID",
-        description = "Obtiene un detalle de medicamento "
+        summary = "Consultar detalle por ID",
+        description = "Busca un registro de medicamento "
                 + "comprobando los permisos del usuario."
     )
-
     @GetMapping("/{id}")
     @PreAuthorize("hasAnyRole('ADMIN','USER','VETERINARIO')")
-
     public ResponseEntity<DetalleMedicamentoRespuesta> buscarPorId(
             @PathVariable Long id,
             Authentication authentication
     ) {
 
-        String correo = obtenerCorreoAutenticado(
-                authentication
-        );
+        String correo = obtenerCorreoAutenticado(authentication);
 
         DetalleMedicamentoAtencion detalle =
                 detalleService.buscarPorId(
@@ -469,14 +402,13 @@ public class DetalleMedicamentoAtencionController {
 
     }
 
+
     // ======================================================
-    // 9. OBTENER CORREO DEL USUARIO AUTENTICADO
+    // 10. OBTENER CORREO DEL USUARIO AUTENTICADO
     // ======================================================
     //
-    // El correo se obtiene desde Spring Security.
-    //
-    // No se recibe desde el JSON para evitar
-    // que un usuario suplante a otro.
+    // El correo procede de Spring Security.
+    // No se acepta desde el JSON.
     //
     // ======================================================
 
@@ -486,8 +418,7 @@ public class DetalleMedicamentoAtencionController {
 
         if (
                 authentication == null
-                ||
-                !authentication.isAuthenticated()
+                || !authentication.isAuthenticated()
         ) {
 
             throw new ResponseStatusException(
@@ -501,15 +432,9 @@ public class DetalleMedicamentoAtencionController {
 
     }
 
+
     // ======================================================
-    // 10. CONVERTIR LISTA DE ENTIDADES A RESPUESTAS
-    // ======================================================
-    //
-    // Evita devolver directamente las relaciones JPA.
-    //
-    // Esto ayuda a prevenir ciclos JSON
-    // y evita mostrar datos innecesarios.
-    //
+    // 11. CONVERTIR LISTA DE ENTIDADES A DTO
     // ======================================================
 
     private List<DetalleMedicamentoRespuesta> convertirLista(
@@ -522,40 +447,30 @@ public class DetalleMedicamentoAtencionController {
 
     }
 
+
     // ======================================================
-    // 11. DTO PARA REGISTRAR MEDICAMENTOS
-    // ======================================================
-    //
-    // Representa los datos que enviara el veterinario.
-    //
-    // Solo recibe identificadores, tipo, cantidad
-    // e indicaciones.
-    //
-    // No recibe precio, subtotal ni stock.
-    //
+    // 12. DTO PARA REGISTRAR UN MEDICAMENTO
     // ======================================================
 
     public static class RegistroMedicamentoRequest {
 
-        // Identificador de la atencion medica.
         @NotNull(message = "La atencion medica es obligatoria")
         private Long atencionId;
 
-        // Identificador de un medicamento existente.
         @NotNull(message = "El medicamento es obligatorio")
         private Long medicamentoId;
 
-        // Tipos permitidos: UTILIZADO, RECETADO y RECETADO_ENTREGADO.
         @NotNull(message = "El tipo de registro es obligatorio")
         @Schema(
-            description = "UTILIZADO: cobro y descuento de stock; "
-                    + "RECETADO: sin cobro ni descuento; "
-                    + "RECETADO_ENTREGADO: cobro y descuento de stock",
-            allowableValues = {"UTILIZADO", "RECETADO", "RECETADO_ENTREGADO"}
+            description = "UTILIZADO, RECETADO o RECETADO_ENTREGADO",
+            allowableValues = {
+                "UTILIZADO",
+                "RECETADO",
+                "RECETADO_ENTREGADO"
+            }
         )
         private TipoRegistro tipoRegistro;
 
-        // Cantidad utilizada o recetada.
         @NotNull(message = "La cantidad es obligatoria")
         @DecimalMin(
             value = "0.01",
@@ -568,20 +483,14 @@ public class DetalleMedicamentoAtencionController {
         )
         private BigDecimal cantidad;
 
-        // Indicaciones opcionales.
         @Size(
             max = 1000,
             message = "Las indicaciones no pueden superar 1000 caracteres"
         )
         private String indicaciones;
 
-        // Constructor necesario para Jackson.
         public RegistroMedicamentoRequest() {
         }
-
-        // ==================================================
-        // GETTERS Y SETTERS
-        // ==================================================
 
         public Long getAtencionId() {
             return atencionId;
@@ -625,15 +534,132 @@ public class DetalleMedicamentoAtencionController {
 
     }
 
+
     // ======================================================
-    // 12. DTO DE RESPUESTA
+    // 13. DTO PARA REGISTRAR VARIOS MEDICAMENTOS
+    // ======================================================
+
+    public static class RegistroMedicamentosLoteRequest {
+
+        @NotNull(message = "La atencion medica es obligatoria")
+        private Long atencionId;
+
+        @NotEmpty(message = "Agrega al menos un medicamento")
+        @Size(
+            max = 30,
+            message = "Puedes agregar como maximo 30 medicamentos"
+        )
+        private List<
+                @NotNull
+                @Valid
+                RegistroMedicamentoItemRequest
+        > medicamentos = new ArrayList<>();
+
+        public RegistroMedicamentosLoteRequest() {
+        }
+
+        public Long getAtencionId() {
+            return atencionId;
+        }
+
+        public void setAtencionId(Long atencionId) {
+            this.atencionId = atencionId;
+        }
+
+        public List<RegistroMedicamentoItemRequest> getMedicamentos() {
+            return medicamentos;
+        }
+
+        public void setMedicamentos(
+                List<RegistroMedicamentoItemRequest> medicamentos
+        ) {
+            this.medicamentos = medicamentos;
+        }
+
+    }
+
+
+    // ======================================================
+    // 14. DTO DE CADA MEDICAMENTO DEL LOTE
+    // ======================================================
+
+    public static class RegistroMedicamentoItemRequest {
+
+        @NotNull(message = "El medicamento es obligatorio")
+        private Long medicamentoId;
+
+        @NotNull(message = "El tipo de registro es obligatorio")
+        @Schema(
+            allowableValues = {
+                "UTILIZADO",
+                "RECETADO",
+                "RECETADO_ENTREGADO"
+            }
+        )
+        private TipoRegistro tipoRegistro;
+
+        @NotNull(message = "La cantidad es obligatoria")
+        @DecimalMin(
+            value = "0.01",
+            message = "La cantidad debe ser mayor que cero"
+        )
+        @Digits(
+            integer = 10,
+            fraction = 2,
+            message = "La cantidad admite maximo dos decimales"
+        )
+        private BigDecimal cantidad;
+
+        @Size(
+            max = 1000,
+            message = "Las indicaciones no pueden superar 1000 caracteres"
+        )
+        private String indicaciones;
+
+        public RegistroMedicamentoItemRequest() {
+        }
+
+        public Long getMedicamentoId() {
+            return medicamentoId;
+        }
+
+        public void setMedicamentoId(Long medicamentoId) {
+            this.medicamentoId = medicamentoId;
+        }
+
+        public TipoRegistro getTipoRegistro() {
+            return tipoRegistro;
+        }
+
+        public void setTipoRegistro(TipoRegistro tipoRegistro) {
+            this.tipoRegistro = tipoRegistro;
+        }
+
+        public BigDecimal getCantidad() {
+            return cantidad;
+        }
+
+        public void setCantidad(BigDecimal cantidad) {
+            this.cantidad = cantidad;
+        }
+
+        public String getIndicaciones() {
+            return indicaciones;
+        }
+
+        public void setIndicaciones(String indicaciones) {
+            this.indicaciones = indicaciones;
+        }
+
+    }
+
+
+    // ======================================================
+    // 15. DTO DE RESPUESTA
     // ======================================================
     //
-    // Devuelve los datos del detalle sin incluir
-    // todas las entidades relacionadas.
-    //
-    // Guarda los precios historicos y cantidades
-    // necesarias para la futura facturacion.
+    // No devolvemos directamente las entidades JPA.
+    // Evitamos ciclos JSON y datos innecesarios.
     //
     // ======================================================
 
@@ -662,10 +688,6 @@ public class DetalleMedicamentoAtencionController {
             LocalDateTime fechaRegistro
 
     ) {
-
-        // ==================================================
-        // CONVERTIR ENTIDAD EN RESPUESTA
-        // ==================================================
 
         public static DetalleMedicamentoRespuesta desde(
                 DetalleMedicamentoAtencion detalle

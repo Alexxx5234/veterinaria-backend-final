@@ -1,8 +1,25 @@
+
 package com.veterinaria.veterinaria.controller;
 
 // ==========================================================
-// IMPORTACIONES
+// VETERINARIA ARÉVALO
+// CONTROLADOR DE VETERINARIOS
+//
+// FUNCIONES:
+// 1. Listar veterinarios.
+// 2. Consultar veterinario por ID.
+// 3. Mantener ruta antigua de registro.
+// 4. Registrar veterinario desde usuario existente.
+// 5. Actualizar datos profesionales.
+// 6. Eliminar ficha profesional de forma segura.
+//
+// SEGURIDAD:
+// - USER y ADMIN pueden consultar.
+// - Solo ADMIN puede registrar, actualizar y eliminar.
+// - No se crean cuentas duplicadas.
+// - Se conserva la contraseña del usuario.
 // ==========================================================
+
 import java.util.List;
 
 import org.springframework.http.HttpStatus;
@@ -15,6 +32,7 @@ import org.springframework.web.server.ResponseStatusException;
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.NotNull;
+import jakarta.validation.constraints.Pattern;
 import jakarta.validation.constraints.Size;
 
 import io.swagger.v3.oas.annotations.Hidden;
@@ -24,111 +42,156 @@ import com.veterinaria.veterinaria.model.Veterinario;
 import com.veterinaria.veterinaria.model.Usuario;
 import com.veterinaria.veterinaria.model.Rol;
 import com.veterinaria.veterinaria.model.EstadoUsuario;
+
 import com.veterinaria.veterinaria.repository.UsuarioRepository;
+import com.veterinaria.veterinaria.repository.CitaRepository;
+
 import com.veterinaria.veterinaria.service.VeterinarioService;
+
 import com.veterinaria.veterinaria.exception.ResourceNotFoundException;
 import com.veterinaria.veterinaria.exception.MensajeRespuesta;
 
+
 // ==========================================================
-// CONTROLADOR DE VETERINARIOS
+// CONTROLADOR PRINCIPAL
 // ==========================================================
-// USER: consulta veterinarios.
-// ADMIN: consulta, registra, actualiza y elimina.
-//
-// REGISTRO NUEVO:
-// El ADMIN elige una cuenta registrada y verificada.
-// El sistema crea su ficha profesional, asigna el rol
-// VETERINARIO y aprueba la cuenta, sin otro registro.
-//
-// COMPATIBILIDAD CON ANGULAR:
-// Se conserva el POST antiguo, pero se oculta de Swagger
-// mientras actualizamos el formulario de Angular.
-// ==========================================================
+
 @RestController
 @RequestMapping("/api/veterinarios")
 public class VeterinarioController {
 
-    // Dependencias para gestionar fichas y consultar usuarios.
+    // ======================================================
+    // 1. DEPENDENCIAS
+    // ======================================================
+
     private final VeterinarioService veterinarioService;
+
     private final UsuarioRepository usuarioRepository;
 
-    // ======================================================
-    // CONSTRUCTOR
-    // ======================================================
-    public VeterinarioController(
-            VeterinarioService veterinarioService,
-            UsuarioRepository usuarioRepository
-    ) {
-        this.veterinarioService = veterinarioService;
-        this.usuarioRepository = usuarioRepository;
-    }
+    private final CitaRepository citaRepository;
+
 
     // ======================================================
-    // 1. LISTAR VETERINARIOS - ORIGINAL SIN CAMBIOS
-    // GET /api/veterinarios
+    // 2. CONSTRUCTOR
     // ======================================================
+
+    public VeterinarioController(
+            VeterinarioService veterinarioService,
+            UsuarioRepository usuarioRepository,
+            CitaRepository citaRepository
+    ) {
+
+        this.veterinarioService = veterinarioService;
+
+        this.usuarioRepository = usuarioRepository;
+
+        this.citaRepository = citaRepository;
+
+    }
+
+
+    // ======================================================
+    // 3. LISTAR TODOS LOS VETERINARIOS
+    //
+    // GET /api/veterinarios
+    //
+    // USER y ADMIN pueden consultar.
+    // ======================================================
+
     @Operation(
         summary = "Listar veterinarios",
-        description = "Obtiene todos los veterinarios registrados en el sistema veterinario."
+        description = "Obtiene todos los veterinarios registrados."
     )
     @GetMapping
     @PreAuthorize("hasAnyRole('USER','ADMIN')")
     public List<Veterinario> listarTodos() {
+
         return veterinarioService.listarTodos();
+
     }
 
+
     // ======================================================
-    // 2. CONSULTAR VETERINARIO POR ID - ORIGINAL SIN CAMBIOS
+    // 4. CONSULTAR VETERINARIO POR ID
+    //
     // GET /api/veterinarios/{id}
     // ======================================================
+
     @Operation(
         summary = "Consultar veterinario por ID",
-        description = "Permite obtener la información de un veterinario específico mediante su identificador."
+        description = "Obtiene la información de un veterinario."
     )
     @GetMapping("/{id}")
     @PreAuthorize("hasAnyRole('USER','ADMIN')")
-    public ResponseEntity<Veterinario> buscarPorId(@PathVariable Long id) {
+    public ResponseEntity<Veterinario> buscarPorId(
+            @PathVariable Long id
+    ) {
+
         Veterinario veterinario = veterinarioService.buscarPorId(id)
+
                 .orElseThrow(() -> new ResourceNotFoundException(
                         "Veterinario no encontrado con id: " + id
                 ));
+
         return ResponseEntity.ok(veterinario);
+
     }
 
+
     // ======================================================
-    // 3. REGISTRO ANTIGUO - CONSERVADO PARA ANGULAR
+    // 5. REGISTRO ANTIGUO
+    //
     // POST /api/veterinarios
+    //
+    // Se conserva temporalmente por compatibilidad.
+    // El nuevo formulario debe utilizar /desde-usuario.
     // ======================================================
-    // @Hidden oculta solamente esta operación de Swagger.
-    // La ruta sigue funcionando para no romper Angular.
-    // No vincula una cuenta de usuario ni asigna roles.
-    // Se eliminará cuando Angular use /desde-usuario.
-    // ======================================================
+
     @Hidden
     @Operation(
-        summary = "Registrar veterinario",
-        description = "Permite crear un nuevo veterinario dentro del sistema."
+        summary = "Registro antiguo de veterinario",
+        description = "Ruta conservada temporalmente por compatibilidad."
     )
     @PostMapping
     @PreAuthorize("hasRole('ADMIN')")
-    public Veterinario crear(@RequestBody Veterinario veterinario) {
+    public Veterinario crear(
+            @RequestBody Veterinario veterinario
+    ) {
+
         veterinario.setId(null);
+
         veterinario.setUsuario(null);
+
         return veterinarioService.guardar(veterinario);
+
     }
 
+
     // ======================================================
-    // 4. REGISTRAR VETERINARIO DESDE UN USUARIO EXISTENTE
+    // 6. REGISTRAR VETERINARIO DESDE USUARIO EXISTENTE
+    //
     // POST /api/veterinarios/desde-usuario
+    //
+    // DATOS RECIBIDOS:
+    // - usuarioId
+    // - cedula
+    // - especialidad
+    // - telefono
+    //
+    // NOMBRE Y CORREO:
+    // Se obtienen de la cuenta seleccionada.
+    //
+    // RESULTADO:
+    // - Se crea la ficha profesional.
+    // - Se vincula con la cuenta original.
+    // - Se asigna rol VETERINARIO.
+    // - Se aprueba y activa la cuenta.
+    // - Se conserva la contraseña.
     // ======================================================
-    // SOLO ADMIN.
-    // Recibe usuarioId, cedula, especialidad y telefono.
-    // Nombre y correo se obtienen de la cuenta registrada.
-    // La transacción evita guardar solo una parte si falla.
-    // ======================================================
+
     @Operation(
         summary = "Registrar veterinario desde usuario",
-        description = "Crea una ficha profesional a partir de una cuenta verificada y le asigna el rol VETERINARIO."
+        description = "Crea una ficha profesional desde una cuenta USER verificada."
     )
     @PostMapping("/desde-usuario")
     @PreAuthorize("hasRole('ADMIN')")
@@ -136,177 +199,407 @@ public class VeterinarioController {
     public ResponseEntity<Veterinario> crearDesdeUsuario(
             @Valid @RequestBody RegistroVeterinarioDesdeUsuarioRequest request
     ) {
-        // 1. Buscar la cuenta que seleccionó el administrador.
-        Usuario usuario = usuarioRepository.findById(request.getUsuarioId())
-                .orElseThrow(() -> new ResourceNotFoundException(
-                        "Usuario no encontrado con id: " + request.getUsuarioId()
-                ));
 
-        // 2. El correo debe estar verificado.
+        // --------------------------------------------------
+        // 6.1. BUSCAR LA CUENTA
+        // --------------------------------------------------
+
+        Usuario usuario = usuarioRepository.findById(
+                request.getUsuarioId()
+        ).orElseThrow(() -> new ResourceNotFoundException(
+                "Usuario no encontrado con id: " + request.getUsuarioId()
+        ));
+
+
+        // --------------------------------------------------
+        // 6.2. COMPROBAR VERIFICACIÓN DEL CORREO
+        // --------------------------------------------------
+
         if (!usuario.isVerificado()) {
+
             throw new ResponseStatusException(
                     HttpStatus.CONFLICT,
                     "El usuario debe verificar su correo primero"
             );
+
         }
 
-        // 3. No convertir cuentas ADMIN en VETERINARIO.
-        if (usuario.getRol() == Rol.ADMIN) {
+
+        // --------------------------------------------------
+        // 6.3. COMPROBAR ROL ACTUAL
+        // --------------------------------------------------
+
+        if (usuario.getRol() != Rol.USER) {
+
             throw new ResponseStatusException(
                     HttpStatus.CONFLICT,
-                    "No se puede convertir una cuenta ADMIN en VETERINARIO"
+                    "Solo se pueden asignar cuentas con rol USER"
             );
+
         }
 
-        // 4. No aprobar cuentas rechazadas o bloqueadas.
-        if (usuario.getEstado() != EstadoUsuario.PENDIENTE
-                && usuario.getEstado() != EstadoUsuario.APROBADA) {
+
+        // --------------------------------------------------
+        // 6.4. COMPROBAR ESTADO
+        // --------------------------------------------------
+
+        if (
+                usuario.getEstado() != EstadoUsuario.PENDIENTE
+                &&
+                usuario.getEstado() != EstadoUsuario.APROBADA
+        ) {
+
             throw new ResponseStatusException(
                     HttpStatus.CONFLICT,
                     "La cuenta debe estar PENDIENTE o APROBADA"
             );
+
         }
 
-        // 5. Evitar dos fichas vinculadas a una misma cuenta.
-        if (veterinarioService.buscarPorUsuarioId(usuario.getId()).isPresent()) {
+
+        // --------------------------------------------------
+        // 6.5. EVITAR CUENTAS DUPLICADAS
+        // --------------------------------------------------
+
+        if (
+                veterinarioService
+                        .buscarPorUsuarioId(usuario.getId())
+                        .isPresent()
+        ) {
+
             throw new ResponseStatusException(
                     HttpStatus.CONFLICT,
                     "Este usuario ya tiene una ficha veterinaria vinculada"
             );
+
         }
 
-        // 6. Evitar crear otra ficha con igual cédula o correo.
+
+        // --------------------------------------------------
+        // 6.6. EVITAR CÉDULAS Y CORREOS DUPLICADOS
+        // --------------------------------------------------
+
         String cedula = request.getCedula().trim();
-        boolean profesionalDuplicado = veterinarioService.listarTodos()
+
+        String correo = usuario.getCorreo();
+
+        boolean profesionalDuplicado =
+                veterinarioService.listarTodos()
+
                 .stream()
+
                 .anyMatch(veterinario ->
-                        (veterinario.getCedula() != null
-                                && veterinario.getCedula().equals(cedula))
+
+                        (
+                            veterinario.getCedula() != null
+                            &&
+                            veterinario.getCedula()
+                                    .trim()
+                                    .equals(cedula)
+                        )
+
                         ||
-                        (veterinario.getEmail() != null
-                                && veterinario.getEmail().equalsIgnoreCase(
-                                        usuario.getCorreo()))
+
+                        (
+                            veterinario.getEmail() != null
+                            &&
+                            correo != null
+                            &&
+                            veterinario.getEmail()
+                                    .trim()
+                                    .equalsIgnoreCase(correo.trim())
+                        )
+
                 );
 
+
         if (profesionalDuplicado) {
+
             throw new ResponseStatusException(
                     HttpStatus.CONFLICT,
-                    "Ya existe una ficha veterinaria con esta cédula o correo. "
-                    + "Se debe revisar esa ficha antes de crear otra"
+                    "Ya existe una ficha veterinaria con esta cédula o correo."
             );
+
         }
 
-        // 7. Crear la ficha profesional sin repetir el registro.
+
+        // --------------------------------------------------
+        // 6.7. CREAR LA FICHA PROFESIONAL
+        // --------------------------------------------------
+
         Veterinario veterinario = new Veterinario();
+
         veterinario.setId(null);
+
         veterinario.setCedula(cedula);
+
         veterinario.setNombre(usuario.getNombre());
 
-        // Campo de compatibilidad; el nombre completo está en Usuario.
+        // Se conserva el campo por compatibilidad
+        // con la entidad Veterinario.
         veterinario.setApellido("");
 
-        veterinario.setEspecialidad(request.getEspecialidad().trim());
-        veterinario.setTelefono(request.getTelefono().trim());
-        veterinario.setEmail(usuario.getCorreo());
+        veterinario.setEspecialidad(
+                request.getEspecialidad().trim()
+        );
 
-        // 8. Vincular la ficha con la cuenta existente.
+        veterinario.setTelefono(
+                request.getTelefono().trim()
+        );
+
+        veterinario.setEmail(correo);
+
+
+        // --------------------------------------------------
+        // 6.8. VINCULAR LA CUENTA EXISTENTE
+        // --------------------------------------------------
+
         veterinario.setUsuario(usuario);
 
-        // 9. El administrador asigna el rol y habilita la cuenta.
+
+        // --------------------------------------------------
+        // 6.9. ASIGNAR EL ROL PROFESIONAL
+        // --------------------------------------------------
+
         usuario.setRol(Rol.VETERINARIO);
+
         usuario.setEstado(EstadoUsuario.APROBADA);
+
         usuario.setActivo(true);
 
-        // 10. Guardar ambos cambios dentro de la transacción.
-        usuarioRepository.save(usuario);
-        Veterinario veterinarioGuardado = veterinarioService.guardar(veterinario);
 
-        // 11. Devolver la ficha creada y el código HTTP 201.
-        return ResponseEntity.status(HttpStatus.CREATED).body(veterinarioGuardado);
+        // --------------------------------------------------
+        // 6.10. GUARDAR AMBOS REGISTROS
+        // --------------------------------------------------
+
+        usuarioRepository.save(usuario);
+
+        Veterinario veterinarioGuardado =
+                veterinarioService.guardar(veterinario);
+
+
+        // --------------------------------------------------
+        // 6.11. RESPUESTA
+        // --------------------------------------------------
+
+        return ResponseEntity
+
+                .status(HttpStatus.CREATED)
+
+                .body(veterinarioGuardado);
+
     }
 
+
     // ======================================================
-    // 5. ACTUALIZAR VETERINARIO - ORIGINAL SIN CAMBIOS
+    // 7. ACTUALIZAR VETERINARIO
+    //
     // PUT /api/veterinarios/{id}
+    //
+    // No se modifica la cuenta vinculada.
     // ======================================================
+
     @Operation(
         summary = "Actualizar veterinario",
-        description = "Permite modificar la información de un veterinario existente mediante su identificador."
+        description = "Actualiza los datos profesionales del veterinario."
     )
     @PutMapping("/{id}")
     @PreAuthorize("hasRole('ADMIN')")
     public ResponseEntity<Veterinario> actualizar(
+
             @PathVariable Long id,
+
             @RequestBody Veterinario datosVeterinario
+
     ) {
-        // Buscar la ficha existente.
-        Veterinario veterinarioExistente = veterinarioService.buscarPorId(id)
+
+        Veterinario veterinarioExistente =
+                veterinarioService.buscarPorId(id)
+
                 .orElseThrow(() -> new ResourceNotFoundException(
                         "Veterinario no encontrado con id: " + id
                 ));
 
-        // Conservar los cambios de datos profesionales originales.
-        veterinarioExistente.setCedula(datosVeterinario.getCedula());
-        veterinarioExistente.setNombre(datosVeterinario.getNombre());
-        veterinarioExistente.setApellido(datosVeterinario.getApellido());
-        veterinarioExistente.setEspecialidad(datosVeterinario.getEspecialidad());
-        veterinarioExistente.setTelefono(datosVeterinario.getTelefono());
-        veterinarioExistente.setEmail(datosVeterinario.getEmail());
 
-        // No tocar usuario_id: se conserva la cuenta vinculada.
-        Veterinario actualizado = veterinarioService.guardar(veterinarioExistente);
+        veterinarioExistente.setCedula(
+                datosVeterinario.getCedula()
+        );
+
+        veterinarioExistente.setNombre(
+                datosVeterinario.getNombre()
+        );
+
+        veterinarioExistente.setApellido(
+                datosVeterinario.getApellido()
+        );
+
+        veterinarioExistente.setEspecialidad(
+                datosVeterinario.getEspecialidad()
+        );
+
+        veterinarioExistente.setTelefono(
+                datosVeterinario.getTelefono()
+        );
+
+        veterinarioExistente.setEmail(
+                datosVeterinario.getEmail()
+        );
+
+
+        // Se conserva usuario_id y su relación original.
+
+        Veterinario actualizado =
+                veterinarioService.guardar(veterinarioExistente);
+
         return ResponseEntity.ok(actualizado);
+
     }
 
+
     // ======================================================
-    // 6. ELIMINAR VETERINARIO - ORIGINAL SIN CAMBIOS
+    // 8. ELIMINAR VETERINARIO DE FORMA SEGURA
+    //
     // DELETE /api/veterinarios/{id}
+    //
+    // REGLAS:
+    // - Solo ADMIN.
+    // - No eliminar si existen citas asociadas.
+    // - Devolver la cuenta vinculada al rol USER.
+    // - Conservar contraseña, estado y activo.
     // ======================================================
+
     @Operation(
-        summary = "Eliminar veterinario",
-        description = "Permite eliminar un veterinario registrado mediante su identificador."
+        summary = "Eliminar ficha de veterinario",
+        description = "Elimina una ficha sin citas y devuelve la cuenta vinculada al rol USER."
     )
     @DeleteMapping("/{id}")
     @PreAuthorize("hasRole('ADMIN')")
-    public ResponseEntity<?> eliminar(@PathVariable Long id) {
-        veterinarioService.buscarPorId(id)
+    @Transactional
+    public ResponseEntity<MensajeRespuesta> eliminar(
+            @PathVariable Long id
+    ) {
+
+        // Buscar la ficha profesional.
+
+        Veterinario veterinario =
+                veterinarioService.buscarPorId(id)
+
                 .orElseThrow(() -> new ResourceNotFoundException(
                         "Veterinario no encontrado con id: " + id
                 ));
 
-        // Se conserva el comportamiento de eliminación original.
+
+        // No eliminar profesionales con citas asociadas.
+
+        if (!citaRepository.findByVeterinarioId(id).isEmpty()) {
+
+            throw new ResponseStatusException(
+                    HttpStatus.CONFLICT,
+                    "No se puede eliminar este veterinario porque tiene citas asociadas. "
+                    + "Primero debes gestionar o reasignar sus citas."
+            );
+
+        }
+
+
+        // Recuperar la cuenta vinculada.
+
+        Usuario usuario = veterinario.getUsuario();
+
+
+        // Devolver el rol a USER.
+        // Se conserva el estado y el indicador activo.
+
+        if (usuario != null) {
+
+            usuario.setRol(Rol.USER);
+
+            usuarioRepository.save(usuario);
+
+        }
+
+
+        // Eliminar únicamente la ficha profesional.
+
         veterinarioService.eliminar(id);
-        return ResponseEntity.ok(new MensajeRespuesta(
-                200,
-                "Veterinario eliminado correctamente",
-                "El registro fue eliminado del sistema"
-        ));
+
+
+        String detalle = usuario != null
+
+                ? "La ficha fue eliminada. La cuenta conserva su contraseña, estado y condición de activación, y vuelve al rol USER."
+
+                : "La ficha profesional fue eliminada. No tenía una cuenta vinculada.";
+
+
+        return ResponseEntity.ok(
+
+                new MensajeRespuesta(
+                        200,
+                        "Veterinario eliminado correctamente",
+                        detalle
+                )
+
+        );
+
     }
 
+
     // ======================================================
-    // 7. DATOS RECIBIDOS PARA EL NUEVO REGISTRO
+    // 9. DTO PARA REGISTRO DESDE USUARIO
+    //
+    // ESTRUCTURA JSON:
+    //
+    // {
+    //   "usuarioId": 5,
+    //   "cedula": "0102030405",
+    //   "especialidad": "Medicina general",
+    //   "telefono": "0991234567"
+    // }
     // ======================================================
-    // Swagger pedirá únicamente los datos profesionales y
-    // el ID de una cuenta existente y verificada.
-    // ======================================================
+
     public static class RegistroVeterinarioDesdeUsuarioRequest {
 
-        @NotNull(message = "Debe seleccionar un usuario")
+
+        @NotNull(
+            message = "Debe seleccionar un usuario"
+        )
         private Long usuarioId;
 
-        @NotBlank(message = "La cedula es obligatoria")
-        @Size(min = 10, max = 10, message = "La cedula debe tener 10 caracteres")
+
+        @NotBlank(
+            message = "La cédula es obligatoria"
+        )
+        @Size(
+            min = 10,
+            max = 10,
+            message = "La cédula debe tener 10 caracteres"
+        )
+        @Pattern(
+            regexp = "^[0-9]{10}$",
+            message = "La cédula debe contener exactamente 10 números"
+        )
         private String cedula;
 
-        @NotBlank(message = "La especialidad es obligatoria")
+
+        @NotBlank(
+            message = "La especialidad es obligatoria"
+        )
         private String especialidad;
 
-        @NotBlank(message = "El telefono es obligatorio")
+
+        @NotBlank(
+            message = "El teléfono es obligatorio"
+        )
         private String telefono;
 
-        // Constructor necesario para recibir datos JSON.
+
+        // Constructor vacío para Jackson.
+
         public RegistroVeterinarioDesdeUsuarioRequest() {
         }
+
+
+        // GETTERS Y SETTERS
 
         public Long getUsuarioId() {
             return usuarioId;
@@ -339,5 +632,7 @@ public class VeterinarioController {
         public void setTelefono(String telefono) {
             this.telefono = telefono;
         }
+
     }
+
 }
