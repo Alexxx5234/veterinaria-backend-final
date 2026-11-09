@@ -277,16 +277,32 @@ public class SecurityConfig {
         // React   → puerto 5173
         //
         // ======================================================
+        // ======================================================
+        // ORIGENES PERMITIDOS
+        // Angular local, React, Tailscale y Vercel
+        // ======================================================
 
         configuration.setAllowedOrigins(
                 List.of(
 
+                        // Angular local
                         "http://localhost:4200",
 
-                        "http://localhost:5173"
+                        // React local
+                        "http://localhost:5173",
+
+                        // Angular por Tailscale VPN
+                        "http://100.110.172.31:4200",
+
+                        // Frontend publico por Tailscale Funnel
+                        "https://alex-pc.tail2065fc.ts.net",
+
+                        // Frontend publicado en Vercel
+                        "https://veterinaria-frontend-final.vercel.app"
 
                 )
         );
+
 
 
 
