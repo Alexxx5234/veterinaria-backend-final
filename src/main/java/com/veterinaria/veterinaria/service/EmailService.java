@@ -2,41 +2,27 @@
 package com.veterinaria.veterinaria.service;
 
 // ==========================================================
-// VETERINARIA ARÉVALO
-// SERVICIO DE ENVÍO DE CORREOS ELECTRÓNICOS
+// VETERINARIA AREVALO
+// SERVICIO DE CORREOS ELECTRONICOS
 //
 // FUNCIONALIDADES:
-// 1. Enviar códigos de verificación.
-// 2. Enviar mensajes HTML.
-// 3. Identificar al remitente.
-// 4. Utilizar configuración SMTP de Spring Boot.
-// 5. Registrar errores sin revelar códigos.
-// 6. Mantener compatibilidad con el registro existente.
-//
-// SEGURIDAD:
-// - No imprimir códigos de verificación.
-// - No almacenar contraseñas SMTP en Java.
-// - No enviar credenciales al frontend.
+// 1. Enviar codigos de verificacion.
+// 2. Enviar correos con HTML.
+// 3. Utilizar Gmail API por HTTPS en Railway.
+// 4. Conservar SMTP para desarrollo local.
+// 5. Mantener la compatibilidad con UsuarioService.
+// 6. Registrar errores sin revelar codigos ni credenciales.
 // ==========================================================
+
+import jakarta.mail.internet.MimeMessage;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import org.springframework.beans.factory.annotation.Value;
-
-import org.springframework.mail.MailException;
 import org.springframework.mail.javamail.JavaMailSender;
 import org.springframework.mail.javamail.MimeMessageHelper;
-
 import org.springframework.stereotype.Service;
-
-import jakarta.mail.MessagingException;
-import jakarta.mail.internet.MimeMessage;
-
-
-// ==========================================================
-// SERVICIO DE CORREO
-// ==========================================================
 
 @Service
 public class EmailService {
@@ -50,21 +36,18 @@ public class EmailService {
 
 
     // ======================================================
-    // 2. SERVIDOR SMTP
+    // 2. SERVICIOS DE ENVIO
     // ======================================================
 
+    // SMTP para trabajar localmente.
     private final JavaMailSender mailSender;
+
+    // Gmail API mediante HTTPS para Railway.
+    private final GmailApiSender gmailApiSender;
 
 
     // ======================================================
     // 3. CORREO REMITENTE
-    // ======================================================
-    //
-    // Se obtiene desde:
-    // spring.mail.username
-    //
-    // Debe corresponder a la cuenta autorizada
-    // para enviar correos desde el servidor SMTP.
     // ======================================================
 
     private final String correoRemitente;
@@ -76,36 +59,28 @@ public class EmailService {
 
     public EmailService(
             JavaMailSender mailSender,
+            GmailApiSender gmailApiSender,
             @Value("${spring.mail.username:}")
             String correoRemitente
     ) {
 
         this.mailSender = mailSender;
 
+        this.gmailApiSender = gmailApiSender;
+
         this.correoRemitente =
                 correoRemitente == null
                         ? ""
                         : correoRemitente.trim();
-
     }
 
 
     // ======================================================
-    // 5. ENVIAR CÓDIGO DE VERIFICACIÓN
+    // 5. ENVIAR CODIGO DE VERIFICACION
     // ======================================================
-    //
-    // Se conserva el método original.
-    //
-    // Esto permite que AuthService o UsuarioService
-    // continúe llamando:
-    //
-    // emailService.enviarCodigoVerificacion(
-    //     correo,
-    //     codigo
-    // );
-    //
-    // No cambia la firma del método.
-    // ======================================================
+
+    // Se conserva el metodo original utilizado por
+    // UsuarioService para el registro de usuarios.
 
     public void enviarCodigoVerificacion(
             String correo,
@@ -116,31 +91,23 @@ public class EmailService {
         // PASO 1. VALIDAR DESTINATARIO
         // ==================================================
 
-        if (
-                correo == null ||
-                correo.isBlank()
-        ) {
+        if (correo == null || correo.isBlank()) {
 
             throw new IllegalArgumentException(
                     "El correo del destinatario es obligatorio"
             );
-
         }
 
 
         // ==================================================
-        // PASO 2. VALIDAR CÓDIGO
+        // PASO 2. VALIDAR CODIGO
         // ==================================================
 
-        if (
-                codigo == null ||
-                codigo.isBlank()
-        ) {
+        if (codigo == null || codigo.isBlank()) {
 
             throw new IllegalArgumentException(
-                    "El código de verificación es obligatorio"
+                    "El codigo de verificacion es obligatorio"
             );
-
         }
 
 
@@ -151,13 +118,12 @@ public class EmailService {
         if (correoRemitente.isBlank()) {
 
             log.error(
-                    "No se configuró spring.mail.username"
+                    "No se configuro spring.mail.username"
             );
 
             throw new IllegalStateException(
-                    "No está configurada la cuenta de envío de correos"
+                    "No esta configurada la cuenta remitente"
             );
-
         }
 
 
@@ -177,6 +143,7 @@ public class EmailService {
         String contenidoHtml = """
             <!DOCTYPE html>
             <html lang="es">
+
             <head>
                 <meta charset="UTF-8">
                 <meta name="viewport"
@@ -324,11 +291,7 @@ public class EmailService {
 
 
         // ==================================================
-        // PASO 6. CREAR VERSIÓN DE TEXTO PLANO
-        // ==================================================
-        //
-        // Se utiliza como alternativa para clientes
-        // de correo que no muestran HTML.
+        // PASO 6. VERSION DE TEXTO PLANO
         // ==================================================
 
         String contenidoTexto = """
@@ -350,14 +313,14 @@ public class EmailService {
 
 
         // ==================================================
-        // PASO 7. ENVIAR CORREO
+        // PASO 7. PREPARAR Y ENVIAR CORREO
         // ==================================================
 
         try {
 
+            // Crear mensaje compatible con Gmail API y SMTP.
             MimeMessage mensaje =
                     mailSender.createMimeMessage();
-
 
             MimeMessageHelper helper =
                     new MimeMessageHelper(
@@ -366,76 +329,68 @@ public class EmailService {
                             "UTF-8"
                     );
 
-
-            // Remitente autorizado.
-            // ======================================================
-            // REMITENTE DEL CORREO
-// ======================================================
-// Utiliza el correo configurado en application.properties.
-// Evita la excepción adicional de codificación.
-
-helper.setFrom(correoRemitente);
-
+            // Correo remitente autorizado.
+            helper.setFrom(correoRemitente);
 
             // Destinatario.
             helper.setTo(destinatario);
-
 
             // Asunto.
             helper.setSubject(
                     "Código de verificación - Veterinaria Arévalo"
             );
 
-
-            // Texto plano y versión HTML.
+            // Contenido HTML y texto plano.
             helper.setText(
                     contenidoTexto,
                     contenidoHtml
             );
 
 
-            // Solicitar envío al servidor SMTP.
-            mailSender.send(mensaje);
-
-
             // ==================================================
-            // PASO 8. CONFIRMACIÓN
-            // ==================================================
-            //
-            // Significa que mailSender terminó
-            // sin lanzar una excepción.
-            //
-            // No garantiza la entrega en bandeja
-            // de entrada del destinatario.
+            // PASO 8. SELECCIONAR PROVEEDOR
             // ==================================================
 
-            log.info(
-                    "El servidor SMTP aceptó el correo de verificación"
-            );
+            if (gmailApiSender.estaHabilitado()) {
 
+                // Railway:
+                // Envio mediante Gmail API por HTTPS.
 
-        } catch (
-                MessagingException |
-                MailException e
-        ) {
+                gmailApiSender.enviar(mensaje);
 
-            // Registrar el error técnico completo.
-            // No mostrar el código ni la contraseña.
+                log.info(
+                        "Gmail API acepto el mensaje de verificacion"
+                );
+
+            } else {
+
+                // Desarrollo local:
+                // Conservamos el servidor SMTP anterior.
+
+                mailSender.send(mensaje);
+
+                log.info(
+                        "SMTP acepto el mensaje de verificacion"
+                );
+            }
+
+            // La aceptacion del proveedor no garantiza
+            // la entrega final en la bandeja de entrada.
+
+        } catch (Exception e) {
+
+            // No registrar codigos de verificacion
+            // ni contrasenas.
 
             log.error(
-                    "Falló el envío del correo de verificación",
+                    "Fallo el envio del correo de verificacion",
                     e
             );
 
-
-            // Conservar la causa para depuración.
             throw new IllegalStateException(
-                    "No se pudo enviar el correo de verificación",
+                    "No se pudo enviar el correo de verificacion",
                     e
             );
-
         }
-
     }
-
 }

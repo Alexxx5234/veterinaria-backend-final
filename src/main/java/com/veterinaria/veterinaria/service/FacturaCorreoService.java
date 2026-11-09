@@ -1,17 +1,35 @@
+
 package com.veterinaria.veterinaria.service;
 
 // ==========================================================
-// IMPORTACIONES DE JAVA
+// VETERINARIA AREVALO
+// ENVIO DE FACTURAS PDF POR CORREO ELECTRONICO
+//
+// FUNCIONALIDADES:
+// 1. Permitir el envio al veterinario responsable.
+// 2. Verificar que la factura este EMITIDA.
+// 3. Impedir envios duplicados.
+// 4. Generar el PDF existente.
+// 5. Enviar mediante Gmail API en Railway.
+// 6. Conservar SMTP para desarrollo local.
+// 7. Registrar el envio solamente si el proveedor acepta.
+// 8. Mantener los permisos y respuestas existentes.
+//
+// IMPORTANTE:
+// El comprobante es interno y no sustituye una factura SRI.
 // ==========================================================
-import java.time.LocalDateTime;
 
-// ==========================================================
-// IMPORTACIONES DE CORREO
-// ==========================================================
+import java.time.LocalDateTime;
+import java.util.Properties;
+
 import jakarta.mail.MessagingException;
+import jakarta.mail.Session;
 import jakarta.mail.internet.AddressException;
 import jakarta.mail.internet.InternetAddress;
 import jakarta.mail.internet.MimeMessage;
+
+import jakarta.persistence.EntityManager;
+import jakarta.persistence.LockModeType;
 
 import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.beans.factory.annotation.Value;
@@ -21,105 +39,115 @@ import org.springframework.mail.MailException;
 import org.springframework.mail.javamail.JavaMailSender;
 import org.springframework.mail.javamail.MimeMessageHelper;
 
-// ==========================================================
-// IMPORTACIONES DE SPRING Y JPA
-// ==========================================================
 import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.server.ResponseStatusException;
 
-import jakarta.persistence.EntityManager;
-import jakarta.persistence.LockModeType;
-
-// ==========================================================
-// IMPORTACIONES DEL PROYECTO
-// ==========================================================
 import com.veterinaria.veterinaria.exception.ResourceNotFoundException;
 import com.veterinaria.veterinaria.model.Factura;
 import com.veterinaria.veterinaria.model.Factura.EstadoFactura;
 import com.veterinaria.veterinaria.repository.FacturaRepository;
 import com.veterinaria.veterinaria.service.FacturaService.FacturaRespuesta;
 
+
 // ==========================================================
-// PASO 65 - ENVIO DE LA FACTURA EN PDF POR CORREO
+// SERVICIO DE ENVIO DE FACTURAS
 // ==========================================================
-// 1. El VETERINARIO solicita expresamente el envio.
-// 2. Se valida que sea responsable de esa atencion.
-// 3. Se verifica que la factura este EMITIDA.
-// 4. Se genera el PDF existente, sin recalcular precios.
-// 5. Se adjunta el PDF al correo del propietario.
-// 6. Solo si SMTP acepta el mensaje se marca correoEnviado.
-//
-// IMPORTANTE:
-// - Descargar el PDF NO envia un correo automaticamente.
-// - El destinatario sale de la factura, nunca del JSON.
-// - No permite enviar dos veces el mismo comprobante.
-// - correoEnviado indica aceptacion del servidor SMTP;
-//   no garantiza la entrega final en la bandeja de entrada.
-// - Se trata de un comprobante interno, no autorizado SRI.
-// ==========================================================
+
 @Service
 public class FacturaCorreoService {
 
     // ======================================================
     // 1. DEPENDENCIAS
     // ======================================================
+
     private final FacturaService facturaService;
+
     private final FacturaPdfService facturaPdfService;
+
     private final FacturaRepository facturaRepository;
-    private final ObjectProvider<JavaMailSender> javaMailSenderProvider;
+
+    private final ObjectProvider<JavaMailSender>
+            javaMailSenderProvider;
+
+    private final GmailApiSender gmailApiSender;
+
     private final EntityManager entityManager;
 
-    // Cuenta configurada en application.properties.
-    // Si no esta configurada, se deja que JavaMailSender
-    // utilice su remitente predeterminado.
+
+    // ======================================================
+    // 2. CORREO REMITENTE
+    // ======================================================
+
     @Value("${spring.mail.username:}")
     private String correoRemitente;
 
+
     // ======================================================
-    // 2. CONSTRUCTOR
+    // 3. CONSTRUCTOR
     // ======================================================
+
     public FacturaCorreoService(
             FacturaService facturaService,
             FacturaPdfService facturaPdfService,
             FacturaRepository facturaRepository,
             ObjectProvider<JavaMailSender> javaMailSenderProvider,
+            GmailApiSender gmailApiSender,
             EntityManager entityManager
     ) {
+
         this.facturaService = facturaService;
+
         this.facturaPdfService = facturaPdfService;
+
         this.facturaRepository = facturaRepository;
+
         this.javaMailSenderProvider = javaMailSenderProvider;
+
+        this.gmailApiSender = gmailApiSender;
+
         this.entityManager = entityManager;
     }
 
+
     // ======================================================
-    // 3. ENVIAR EL PDF DE UNA FACTURA EMITIDA
+    // 4. ENVIAR FACTURA POR CORREO
     // ======================================================
-    // Solo el veterinario asignado puede ejecutar el envio.
-    // El bloqueo evita solicitudes simultaneas para una
-    // misma factura mientras se realiza la operacion.
     //
-    // NOTA: Esta implementacion sencilla mantiene el bloqueo
-    // durante el envio SMTP. Para produccion se recomienda
-    // implementar una cola de trabajos / patron outbox.
+    // Solo el veterinario responsable puede enviar.
+    // El metodo conserva la seguridad del proyecto.
+    //
     // ======================================================
+
     @PreAuthorize("hasRole('VETERINARIO')")
     @Transactional
     public ResultadoEnvioFactura enviarFacturaPorCorreo(
             Long facturaId,
             String correoAutenticado
     ) {
-        // 3.1. Validar el identificador solicitado.
+
+        // ==================================================
+        // PASO 1. VALIDAR ID
+        // ==================================================
+
         if (facturaId == null || facturaId <= 0) {
+
             throw new ResponseStatusException(
                     HttpStatus.BAD_REQUEST,
                     "El ID de la factura debe ser positivo"
             );
         }
 
-        // 3.2. Bloquear la factura contra dos envios paralelos.
+
+        // ==================================================
+        // PASO 2. BLOQUEAR FACTURA
+        // ==================================================
+        //
+        // Evita dos operaciones simultaneas de envio.
+        //
+        // ==================================================
+
         Factura factura = entityManager.find(
                 Factura.class,
                 facturaId,
@@ -127,154 +155,327 @@ public class FacturaCorreoService {
         );
 
         if (factura == null) {
+
             throw new ResourceNotFoundException(
                     "Factura no encontrada con id: " + facturaId
             );
         }
 
-        // 3.3. Validar con el Service EXISTENTE que el JWT
-        // pertenezca al veterinario responsable de la cita.
-        // No se elimina ni se modifica la seguridad previa.
+
+        // ==================================================
+        // PASO 3. VERIFICAR VETERINARIO RESPONSABLE
+        // ==================================================
+
         FacturaRespuesta datos = facturaService.buscarPorId(
                 facturaId,
                 correoAutenticado
         );
 
-        // 3.4. Solo pueden enviarse facturas emitidas.
+
+        // ==================================================
+        // PASO 4. VERIFICAR ESTADO
+        // ==================================================
+
         if (factura.getEstado() != EstadoFactura.EMITIDA) {
+
             throw new ResponseStatusException(
                     HttpStatus.CONFLICT,
                     "Primero debes emitir la factura"
             );
         }
 
-        // 3.5. No duplicar un mensaje ya aceptado por SMTP.
+
+        // ==================================================
+        // PASO 5. EVITAR ENVIOS DUPLICADOS
+        // ==================================================
+
         if (factura.isCorreoEnviado()) {
+
             throw new ResponseStatusException(
                     HttpStatus.CONFLICT,
                     "Esta factura ya fue enviada por correo"
             );
         }
 
-        // 3.6. El correo del destinatario se obtiene de
-        // la factura guardada, nunca del cliente HTTP.
+
+        // ==================================================
+        // PASO 6. OBTENER DESTINATARIO
+        // ==================================================
+        //
+        // El correo viene de la factura almacenada.
+        // No se acepta un destinatario enviado por Angular.
+        //
+        // ==================================================
+
         String destinatario = factura.getCorreoCliente();
+
         validarDestinatario(destinatario);
+
         destinatario = destinatario.trim();
 
-        // 3.7. Verificar que SMTP este configurado en Spring.
-        // La API puede arrancar aunque aun no exista un emisor.
-        JavaMailSender javaMailSender = javaMailSenderProvider.getIfAvailable();
-        if (javaMailSender == null) {
+
+        // ==================================================
+        // PASO 7. SELECCIONAR PROVEEDOR
+        // ==================================================
+
+        boolean usarGmailApi = gmailApiSender.estaHabilitado();
+
+        JavaMailSender javaMailSender =
+                javaMailSenderProvider.getIfAvailable();
+
+
+        // En desarrollo local necesitamos SMTP.
+        if (!usarGmailApi && javaMailSender == null) {
+
             throw new ResponseStatusException(
                     HttpStatus.SERVICE_UNAVAILABLE,
-                    "No hay servicio de correo SMTP configurado. "
-                    + "Revisa spring.mail.host en application.properties"
+                    "No existe un servicio SMTP configurado"
             );
         }
 
-        // 3.8. Generar el PDF mediante el Service existente.
-        // Tambien vuelve a verificar los permisos del JWT.
+
+        // Gmail API requiere un remitente autorizado.
+        if (usarGmailApi &&
+                (correoRemitente == null ||
+                 correoRemitente.isBlank())) {
+
+            throw new ResponseStatusException(
+                    HttpStatus.SERVICE_UNAVAILABLE,
+                    "No esta configurado el remitente de Gmail API"
+            );
+        }
+
+
+        // ==================================================
+        // PASO 8. GENERAR PDF
+        // ==================================================
+        //
+        // Utilizamos el servicio existente.
+        // No modificamos precios ni datos de facturacion.
+        //
+        // ==================================================
+
         byte[] contenidoPdf = facturaPdfService.generarPdf(
                 facturaId,
                 correoAutenticado
         );
 
-        // 3.9. Construir y enviar el mensaje con adjunto.
-        try {
-            MimeMessage mensaje = javaMailSender.createMimeMessage();
-            MimeMessageHelper helper = new MimeMessageHelper(
-                    mensaje,
-                    true,
-                    "UTF-8"
-            );
 
-            if (correoRemitente != null && !correoRemitente.isBlank()) {
+        // ==================================================
+        // PASO 9. PREPARAR CORREO CON PDF ADJUNTO
+        // ==================================================
+
+        try {
+
+            MimeMessage mensaje;
+
+            if (javaMailSender != null) {
+
+                mensaje = javaMailSender.createMimeMessage();
+
+            } else {
+
+                // Permite crear mensajes MIME aunque
+                // solamente utilicemos Gmail API.
+
+                Session sesion = Session.getInstance(
+                        new Properties()
+                );
+
+                mensaje = new MimeMessage(sesion);
+            }
+
+
+            MimeMessageHelper helper =
+                    new MimeMessageHelper(
+                            mensaje,
+                            true,
+                            "UTF-8"
+                    );
+
+
+            // ==================================================
+            // REMITENTE
+            // ==================================================
+
+            if (correoRemitente != null &&
+                    !correoRemitente.isBlank()) {
+
                 helper.setFrom(correoRemitente.trim());
             }
 
+
+            // ==================================================
+            // DESTINATARIO
+            // ==================================================
+
             helper.setTo(destinatario);
+
+
+            // ==================================================
+            // ASUNTO
+            // ==================================================
+
             helper.setSubject(
                     "Comprobante de atencion veterinaria - "
                     + datos.numeroFactura()
             );
 
-            // Mensaje sencillo y entendible para el cliente.
+
+            // ==================================================
+            // CONTENIDO DEL CORREO
+            // ==================================================
+
             String textoCorreo =
-                    "Estimado/a " + datos.nombreCliente() + ",\n\n"
-                    + "Adjuntamos el comprobante interno correspondiente "
-                    + "a la atencion de su mascota "
-                    + datos.nombreMascota() + ".\n\n"
+                    "Estimado/a " + datos.nombreCliente()
+                    + ",\n\n"
+
+                    + "Adjuntamos el comprobante interno "
+                    + "correspondiente a la atencion de su mascota "
+
+                    + datos.nombreMascota()
+                    + ".\n\n"
+
                     + "Numero de comprobante: "
-                    + datos.numeroFactura() + "\n\n"
-                    + "Este documento es un comprobante interno y no "
-                    + "sustituye una factura autorizada por el SRI.\n\n"
-                    + "Atentamente,\nVeterinaria";
+                    + datos.numeroFactura()
+                    + "\n\n"
+
+                    + "Este documento es un comprobante interno "
+                    + "y no sustituye una factura autorizada "
+                    + "por el SRI.\n\n"
+
+                    + "Atentamente,\n"
+                    + "Veterinaria Arevalo";
+
 
             helper.setText(textoCorreo, false);
 
-            // Se adjuntan los mismos bytes descargables de Swagger.
+
+            // ==================================================
+            // PASO 10. ADJUNTAR PDF
+            // ==================================================
+
             helper.addAttachment(
                     "comprobante-interno-" + facturaId + ".pdf",
                     new ByteArrayResource(contenidoPdf),
                     "application/pdf"
             );
 
-            // Si el servidor SMTP rechaza el mensaje, lanzara
-            // una excepcion y NO se marcara como enviado.
-            javaMailSender.send(mensaje);
 
-        } catch (MessagingException | MailException ex) {
+            // ==================================================
+            // PASO 11. ENVIAR CORREO
+            // ==================================================
+
+            if (usarGmailApi) {
+
+                // Produccion Railway:
+                // Gmail API utiliza HTTPS.
+                // Incluye el documento PDF adjunto.
+
+                gmailApiSender.enviar(mensaje);
+
+            } else {
+
+                // Desarrollo local:
+                // Conservamos SMTP.
+
+                javaMailSender.send(mensaje);
+            }
+
+
+        } catch (
+                MessagingException |
+                MailException |
+                IllegalStateException ex
+        ) {
+
+            // Si el proveedor rechaza el mensaje,
+            // no marcamos la factura como enviada.
+
             throw new ResponseStatusException(
                     HttpStatus.SERVICE_UNAVAILABLE,
                     "No se pudo enviar el PDF por correo. "
-                    + "Revisa la configuracion SMTP y el registro del servidor",
+                    + "Revisa el proveedor de correo "
+                    + "y los registros del backend",
                     ex
             );
         }
 
-        // 3.10. Registrar el envio solo tras aceptacion SMTP.
+
+        // ==================================================
+        // PASO 12. REGISTRAR ENVIO EXITOSO
+        // ==================================================
+        //
+        // Se registra despues de la aceptacion del proveedor.
+        // Esto no garantiza entrega en bandeja de entrada.
+        //
+        // ==================================================
+
         LocalDateTime fechaEnvio = LocalDateTime.now();
+
         factura.setCorreoEnviado(true);
+
         factura.setFechaEnvioCorreo(fechaEnvio);
+
         facturaRepository.saveAndFlush(factura);
 
-        // 3.11. Devolver el resultado al Controller / Swagger.
+
+        // ==================================================
+        // PASO 13. RESPUESTA A ANGULAR Y SWAGGER
+        // ==================================================
+
         return new ResultadoEnvioFactura(
                 factura.getId(),
                 factura.getNumeroFactura(),
                 destinatario,
                 true,
                 fechaEnvio,
-                "El servidor de correo acepto el mensaje con el PDF adjunto"
+                "El proveedor de correo acepto "
+                + "el mensaje con el PDF adjunto"
         );
     }
 
+
     // ======================================================
-    // 4. VERIFICAR EL CORREO DESTINATARIO
+    // 5. VALIDAR CORREO DEL DESTINATARIO
     // ======================================================
+
     private void validarDestinatario(String correo) {
+
         if (correo == null || correo.isBlank()) {
+
             throw new ResponseStatusException(
                     HttpStatus.CONFLICT,
-                    "La factura no tiene un correo de propietario registrado"
+                    "La factura no tiene un correo "
+                    + "de propietario registrado"
             );
         }
 
         try {
-            InternetAddress direccion = new InternetAddress(correo.trim(), true);
+
+            InternetAddress direccion =
+                    new InternetAddress(
+                            correo.trim(),
+                            true
+                    );
+
             direccion.validate();
+
         } catch (AddressException ex) {
+
             throw new ResponseStatusException(
                     HttpStatus.CONFLICT,
-                    "El correo del propietario no tiene un formato valido"
+                    "El correo del propietario "
+                    + "no tiene un formato valido"
             );
         }
     }
 
+
     // ======================================================
-    // 5. RESPUESTA DEL ENVIO PARA SWAGGER Y ANGULAR
+    // 6. RESPUESTA DEL ENVIO
     // ======================================================
+
     public record ResultadoEnvioFactura(
             Long facturaId,
             String numeroFactura,
